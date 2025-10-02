@@ -177,3 +177,12 @@ export type ConfigureConnectionPayload = {
   tableName: string;
   fieldMapping: FieldMapping;
 };
+
+export type ConfigureConnectionResponse = {
+  success: boolean;
+  connection: SafeDbConnection;
+};
+
+export type DbColumnsResult = {
+  columns: string[];
+};
