@@ -259,9 +259,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/db-connections", async (req, res) => {
     try {
       const connections = await storage.getDbConnections();
-      // Don't send passwords to frontend
-      const safeConnections = connections.map(({ password, ...conn }) => conn);
-      res.json(safeConnections);
+      // Password is already removed by storage layer
+      res.json(connections);
     } catch (error) {
       console.error("Get DB connections error:", error);
       res.status(500).json({ error: "Failed to get database connections" });
@@ -271,8 +270,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/db-connections", async (req, res) => {
     try {
       const connection = await storage.createDbConnection(req.body);
-      const { password, ...safeConnection } = connection;
-      res.status(201).json(safeConnection);
+      // Password is already removed by storage layer
+      res.status(201).json(connection);
     } catch (error) {
       console.error("Create DB connection error:", error);
       if (error instanceof Error) {

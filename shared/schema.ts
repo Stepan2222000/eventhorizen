@@ -122,6 +122,8 @@ export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
 
 export type InsertDbConnection = z.infer<typeof insertDbConnectionSchema>;
 
+export type SafeDbConnection = Omit<DbConnection, 'password'>;
+
 export type DbConnectionTest = {
   success: boolean;
   message: string;

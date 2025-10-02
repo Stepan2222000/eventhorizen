@@ -10,6 +10,7 @@ import AddMovement from "@/pages/add-movement";
 import StockLevels from "@/pages/stock-levels";
 import MovementHistory from "@/pages/movement-history";
 import BulkImport from "@/pages/bulk-import";
+import DbConnections from "@/pages/db-connections";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -21,6 +22,7 @@ function Router() {
       <Route path="/stock" component={StockLevels} />
       <Route path="/history" component={MovementHistory} />
       <Route path="/import" component={BulkImport} />
+      <Route path="/db-connections" component={DbConnections} />
       <Route component={NotFound} />
     </Switch>
   );

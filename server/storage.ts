@@ -10,7 +10,7 @@ import type {
   ArticleSearchResult,
   BulkImportRow,
   BulkImportResult,
-  DbConnection,
+  SafeDbConnection,
   InsertDbConnection,
   DbConnectionTest,
   DbTablesResult
@@ -39,9 +39,9 @@ export interface IStorage {
   // Bulk import
   processBulkImport(rows: BulkImportRow[]): Promise<BulkImportResult>;
   
-  // Database connections
-  getDbConnections(): Promise<DbConnection[]>;
-  createDbConnection(connection: InsertDbConnection): Promise<DbConnection>;
+  // Database connections (password never returned)
+  getDbConnections(): Promise<SafeDbConnection[]>;
+  createDbConnection(connection: InsertDbConnection): Promise<SafeDbConnection>;
   deleteDbConnection(id: number): Promise<void>;
   testDbConnection(connection: InsertDbConnection): Promise<DbConnectionTest>;
   getDbTables(connectionId: number): Promise<DbTablesResult>;
@@ -302,21 +302,22 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
-  async getDbConnections(): Promise<DbConnection[]> {
+  async getDbConnections(): Promise<SafeDbConnection[]> {
     try {
       const result = await inventoryDb
         .select()
         .from(dbConnections)
         .orderBy(sql`created_at DESC`);
       
-      return result;
+      // Remove password from all results
+      return result.map(({ password, ...safe }) => safe);
     } catch (error) {
       console.error('Error getting DB connections:', error);
       throw new Error('Failed to get database connections');
     }
   }
 
-  async createDbConnection(connection: InsertDbConnection): Promise<DbConnection> {
+  async createDbConnection(connection: InsertDbConnection): Promise<SafeDbConnection> {
     try {
       const result = await inventoryDb
         .insert(dbConnections)
@@ -326,7 +327,9 @@ export class DatabaseStorage implements IStorage {
         })
         .returning();
       
-      return result[0];
+      // Remove password from response
+      const { password, ...safe } = result[0];
+      return safe;
     } catch (error) {
       console.error('Error creating DB connection:', error);
       throw error;

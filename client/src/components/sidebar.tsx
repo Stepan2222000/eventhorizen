@@ -8,6 +8,7 @@ const navigation = [
   { name: 'Остатки', href: '/stock', icon: 'fas fa-warehouse' },
   { name: 'История движений', href: '/history', icon: 'fas fa-clock-rotate-left' },
   { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
+  { name: 'Подключения БД', href: '/db-connections', icon: 'fas fa-database' },
 ];
 
 export function Sidebar() {
