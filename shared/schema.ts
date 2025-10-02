@@ -117,6 +117,7 @@ export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
   database: z.string().min(1, "База данных обязательна"),
   username: z.string().min(1, "Имя пользователя обязательно"),
   password: z.string().min(1, "Пароль обязателен"),
+  ssl: z.string().optional().nullable(),
 });
 
 export type InsertDbConnection = z.infer<typeof insertDbConnectionSchema>;

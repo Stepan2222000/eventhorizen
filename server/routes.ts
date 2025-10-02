@@ -255,6 +255,74 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Database connections management
+  app.get("/api/db-connections", async (req, res) => {
+    try {
+      const connections = await storage.getDbConnections();
+      // Don't send passwords to frontend
+      const safeConnections = connections.map(({ password, ...conn }) => conn);
+      res.json(safeConnections);
+    } catch (error) {
+      console.error("Get DB connections error:", error);
+      res.status(500).json({ error: "Failed to get database connections" });
+    }
+  });
+
+  app.post("/api/db-connections", async (req, res) => {
+    try {
+      const connection = await storage.createDbConnection(req.body);
+      const { password, ...safeConnection } = connection;
+      res.status(201).json(safeConnection);
+    } catch (error) {
+      console.error("Create DB connection error:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to create database connection" });
+      }
+    }
+  });
+
+  app.delete("/api/db-connections/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await storage.deleteDbConnection(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Delete DB connection error:", error);
+      res.status(500).json({ error: "Failed to delete database connection" });
+    }
+  });
+
+  app.post("/api/db-connections/test", async (req, res) => {
+    try {
+      const result = await storage.testDbConnection(req.body);
+      res.json(result);
+    } catch (error) {
+      console.error("Test DB connection error:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ success: false, message: error.message });
+      } else {
+        res.status(500).json({ success: false, message: "Failed to test connection" });
+      }
+    }
+  });
+
+  app.post("/api/db-connections/:id/tables", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const result = await storage.getDbTables(id);
+      res.json(result);
+    } catch (error) {
+      console.error("Get DB tables error:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to get tables" });
+      }
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }

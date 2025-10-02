@@ -1,6 +1,6 @@
 import { eq, sql, and, ilike } from "drizzle-orm";
 import { partsDb, inventoryDb } from "./db";
-import { smart, reasons, movements } from "@shared/schema";
+import { smart, reasons, movements, dbConnections } from "@shared/schema";
 import type { 
   Smart, 
   Reason, 
@@ -9,9 +9,14 @@ import type {
   StockLevel, 
   ArticleSearchResult,
   BulkImportRow,
-  BulkImportResult
+  BulkImportResult,
+  DbConnection,
+  InsertDbConnection,
+  DbConnectionTest,
+  DbTablesResult
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
+import { neon } from "@neondatabase/serverless";
 
 export interface IStorage {
   // SMART reference operations
@@ -33,6 +38,13 @@ export interface IStorage {
   
   // Bulk import
   processBulkImport(rows: BulkImportRow[]): Promise<BulkImportResult>;
+  
+  // Database connections
+  getDbConnections(): Promise<DbConnection[]>;
+  createDbConnection(connection: InsertDbConnection): Promise<DbConnection>;
+  deleteDbConnection(id: number): Promise<void>;
+  testDbConnection(connection: InsertDbConnection): Promise<DbConnectionTest>;
+  getDbTables(connectionId: number): Promise<DbTablesResult>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -288,6 +300,117 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result;
+  }
+
+  async getDbConnections(): Promise<DbConnection[]> {
+    try {
+      const result = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .orderBy(sql`created_at DESC`);
+      
+      return result;
+    } catch (error) {
+      console.error('Error getting DB connections:', error);
+      throw new Error('Failed to get database connections');
+    }
+  }
+
+  async createDbConnection(connection: InsertDbConnection): Promise<DbConnection> {
+    try {
+      const result = await inventoryDb
+        .insert(dbConnections)
+        .values({
+          ...connection,
+          updatedAt: new Date(),
+        })
+        .returning();
+      
+      return result[0];
+    } catch (error) {
+      console.error('Error creating DB connection:', error);
+      throw error;
+    }
+  }
+
+  async deleteDbConnection(id: number): Promise<void> {
+    try {
+      await inventoryDb
+        .delete(dbConnections)
+        .where(eq(dbConnections.id, id));
+    } catch (error) {
+      console.error('Error deleting DB connection:', error);
+      throw new Error('Failed to delete database connection');
+    }
+  }
+
+  async testDbConnection(connection: InsertDbConnection): Promise<DbConnectionTest> {
+    try {
+      // Build connection string
+      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
+      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
+      
+      // Try to connect
+      const testDb = neon(connectionString);
+      const result = await testDb`SELECT version()`;
+      
+      return {
+        success: true,
+        message: 'Соединение успешно',
+        version: result[0]?.version || 'Unknown',
+      };
+    } catch (error) {
+      console.error('DB connection test error:', error);
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Не удалось подключиться',
+      };
+    }
+  }
+
+  async getDbTables(connectionId: number): Promise<DbTablesResult> {
+    try {
+      // Get connection details
+      const connections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, connectionId))
+        .limit(1);
+      
+      if (!connections.length) {
+        throw new Error('Connection not found');
+      }
+      
+      const connection = connections[0];
+      
+      // Build connection string
+      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
+      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
+      
+      // Connect and get tables
+      const testDb = neon(connectionString);
+      const result = await testDb`
+        SELECT 
+          table_schema as schema,
+          table_name as name,
+          table_type as type
+        FROM information_schema.tables 
+        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+        ORDER BY table_schema, table_name
+      `;
+      
+      return {
+        connectionName: connection.name,
+        tables: result.map((row: any) => ({
+          schema: row.schema,
+          name: row.name,
+          type: row.type,
+        })),
+      };
+    } catch (error) {
+      console.error('Error getting DB tables:', error);
+      throw new Error(error instanceof Error ? error.message : 'Failed to get tables');
+    }
   }
 }
 
