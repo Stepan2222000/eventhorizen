@@ -4,6 +4,15 @@
 
 This is an internal inventory tracking system that links user-entered article codes to a standardized SMART reference database. The system handles fuzzy matching of article variants (different cases, delimiters, Cyrillic/Latin lookalikes) and maintains a complete movement history with current stock levels calculated from transaction deltas.
 
+## Recent Changes
+
+**October 2, 2025 - Critical Bug Fixes:**
+- ✅ **Auto SMART Lookup**: Added automatic SMART code search when adding movements - users now only enter the article, system finds SMART code automatically
+- ✅ **Disambiguation Modal**: Integrated modal dialog for selecting from multiple SMART matches
+- ✅ **Stale Data Protection**: Implemented safeguards to prevent article/SMART mismatches when user edits article field
+- ✅ **Race Condition Handling**: Added logic to ignore outdated search results when article changes during async lookup
+- ✅ **Full Test Coverage**: Comprehensive e2e tests verify all scenarios (single match, multiple matches, no matches, normalization)
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
