@@ -44,7 +44,11 @@ export class DatabaseStorage implements IStorage {
         .where(
           sql`EXISTS (
             SELECT 1 FROM jsonb_array_elements_text(${smart.articles}) as article
-            WHERE UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')) = ${normalizedArticle}
+            WHERE TRANSLATE(
+              UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
+              'АВЕКМНОРСТУХЁ',
+              'ABEKMHOPCTYXE'
+            ) = ${normalizedArticle}
           )`
         );
       
@@ -129,13 +133,14 @@ export class DatabaseStorage implements IStorage {
       const result = await inventoryDb.execute(sql`
         SELECT 
           s.smart,
-          s.article,
-          s.total_qty,
+          string_agg(DISTINCT s.article, ', ') as article,
+          SUM(s.total_qty) as total_qty,
           sm.brand,
           sm.description,
           sm.name
         FROM inventory.stock s
         LEFT JOIN public.smart sm ON s.smart = sm.smart
+        GROUP BY s.smart, sm.brand, sm.description, sm.name
         ORDER BY s.smart
         LIMIT ${limit} OFFSET ${offset}
       `);

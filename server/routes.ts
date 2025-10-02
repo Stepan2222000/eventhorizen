@@ -163,7 +163,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        rows = XLSX.utils.sheet_to_json(worksheet);
+        const rawRows = XLSX.utils.sheet_to_json(worksheet) as any[];
+        
+        // Convert Excel rows to BulkImportRow format (handle both snake_case and camelCase)
+        rows = rawRows.map(row => ({
+          article: row.article || '',
+          qtyDelta: parseInt(row.qty_delta || row.qtyDelta) || 0,
+          reason: row.reason || '',
+          note: row.note || undefined,
+          smart: row.smart || undefined,
+        })).filter(row => row.article && row.qtyDelta && row.reason);
       } else if (req.file.mimetype.includes('csv') || req.file.originalname?.endsWith('.csv')) {
         // CSV file
         const csvText = req.file.buffer.toString('utf-8');
@@ -176,10 +185,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           headers.forEach((header, index) => {
             row[header] = values[index] || '';
           });
-          if (row.article && row.qtyDelta && row.reason) {
+          
+          const qtyDelta = parseInt(row.qty_delta || row.qtyDelta) || 0;
+          
+          if (row.article && qtyDelta && row.reason) {
             rows.push({
               article: row.article,
-              qtyDelta: parseInt(row.qtyDelta) || 0,
+              qtyDelta: qtyDelta,
               reason: row.reason,
               note: row.note || undefined,
               smart: row.smart || undefined,

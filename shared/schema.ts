@@ -1,9 +1,9 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, pgSchema, text, varchar, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Parts Admin Database (Read-Only) - SMART reference
+// Parts Admin Database (Read-Only) - SMART reference (public schema)
 export const smart = pgTable("smart", {
   smart: varchar("smart").primaryKey(),
   articles: jsonb("articles").$type<string[]>().notNull(),
@@ -12,13 +12,16 @@ export const smart = pgTable("smart", {
   description: text("description"),
 });
 
+// Inventory schema for movement tracking
+export const inventorySchema = pgSchema("inventory");
+
 // Inventory Database (Read-Write) - Tracking
-export const reasons = pgTable("reasons", {
+export const reasons = inventorySchema.table("reasons", {
   code: varchar("code").primaryKey(),
   title: text("title").notNull(),
 });
 
-export const movements = pgTable("movements", {
+export const movements = inventorySchema.table("movements", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   smart: varchar("smart").notNull(),
   article: text("article").notNull(),
