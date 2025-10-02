@@ -89,3 +89,51 @@ export type BulkImportResult = {
     data: BulkImportRow;
   }>;
 };
+
+// Database connections table for managing external DB connections
+export const dbConnections = inventorySchema.table("db_connections", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: varchar("name", { length: 255 }).notNull(),
+  host: varchar("host", { length: 255 }).notNull(),
+  port: integer("port").default(5432).notNull(),
+  database: varchar("database", { length: 255 }).notNull(),
+  username: varchar("username", { length: 255 }).notNull(),
+  password: text("password").notNull(),
+  ssl: varchar("ssl", { length: 50 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type DbConnection = typeof dbConnections.$inferSelect;
+
+export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  name: z.string().min(1, "Название обязательно"),
+  host: z.string().min(1, "Хост обязателен"),
+  port: z.number().int().positive().default(5432),
+  database: z.string().min(1, "База данных обязательна"),
+  username: z.string().min(1, "Имя пользователя обязательно"),
+  password: z.string().min(1, "Пароль обязателен"),
+});
+
+export type InsertDbConnection = z.infer<typeof insertDbConnectionSchema>;
+
+export type DbConnectionTest = {
+  success: boolean;
+  message: string;
+  version?: string;
+};
+
+export type DbTable = {
+  schema: string;
+  name: string;
+  type: string;
+};
+
+export type DbTablesResult = {
+  tables: DbTable[];
+  connectionName: string;
+};
