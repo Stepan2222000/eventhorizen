@@ -30,15 +30,15 @@ export default function ArticleSearch() {
       
       if (results.length === 0) {
         toast({
-          title: "No matches found",
-          description: `No SMART codes found for article: ${searchQuery}`,
+          title: "Совпадений не найдено",
+          description: `SMART код для артикула не найден: ${searchQuery}`,
           variant: "destructive",
         });
       } else if (results.length === 1) {
         setSelectedResult(results[0]);
         toast({
-          title: "Match found",
-          description: `Found SMART code: ${results[0].smart}`,
+          title: "Найдено совпадение",
+          description: `Найден SMART код: ${results[0].smart}`,
         });
       } else {
         setShowDisambiguation(true);
@@ -47,8 +47,8 @@ export default function ArticleSearch() {
     onError: (error) => {
       setIsSearching(false);
       toast({
-        title: "Search failed",
-        description: error instanceof Error ? error.message : "Failed to search articles",
+        title: "Ошибка поиска",
+        description: error instanceof Error ? error.message : "Не удалось выполнить поиск",
         variant: "destructive",
       });
     },
@@ -68,8 +68,8 @@ export default function ArticleSearch() {
     setSelectedResult(result);
     setShowDisambiguation(false);
     toast({
-      title: "SMART code selected",
-      description: `Selected: ${result.smart}`,
+      title: "SMART код выбран",
+      description: `Выбран: ${result.smart}`,
     });
   };
 
@@ -77,8 +77,8 @@ export default function ArticleSearch() {
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Article Search</h2>
-          <p className="text-sm text-muted-foreground mt-1">Find SMART codes by article variants</p>
+          <h2 className="text-2xl font-bold text-foreground">Поиск артикулов</h2>
+          <p className="text-sm text-muted-foreground mt-1">Поиск SMART кодов по вариантам артикулов</p>
         </div>
       </header>
 
@@ -89,8 +89,8 @@ export default function ArticleSearch() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-foreground">Search Articles</div>
-                  <CardDescription>Find SMART code by any article variant</CardDescription>
+                  <div className="text-lg font-semibold text-foreground">Поиск артикулов</div>
+                  <CardDescription>Найти SMART код по любому варианту артикула</CardDescription>
                 </div>
                 <i className="fas fa-magnifying-glass text-muted-foreground text-xl"></i>
               </CardTitle>
@@ -99,13 +99,13 @@ export default function ArticleSearch() {
               <form onSubmit={handleSearch} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-2">
-                    Article Code
-                    <span className="text-muted-foreground font-normal ml-1">(any format)</span>
+                    Код артикула
+                    <span className="text-muted-foreground font-normal ml-1">(любой формат)</span>
                   </label>
                   <div className="relative">
                     <Input
                       type="text"
-                      placeholder="e.g., ABC-123, АБЦ123, abc.123"
+                      placeholder="например: ABC-123, АБЦ123, abc.123"
                       className="font-mono pr-20"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
@@ -121,13 +121,13 @@ export default function ArticleSearch() {
                       {isSearching ? (
                         <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
                       ) : (
-                        "Search"
+                        "Поиск"
                       )}
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-2">
                     <i className="fas fa-info-circle mr-1"></i>
-                    Supports mixed case, delimiters, and Cyrillic/Latin variants
+                    Поддерживаются разные регистры, разделители и кириллица/латиница
                   </p>
                 </div>
               </form>
@@ -137,7 +137,7 @@ export default function ArticleSearch() {
                 <div className="border border-border rounded-lg p-4 bg-muted/50 mt-4">
                   <div className="flex items-center gap-3 mb-3">
                     <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm text-muted-foreground">Searching database...</span>
+                    <span className="text-sm text-muted-foreground">Поиск в базе данных...</span>
                   </div>
                 </div>
               )}
@@ -147,13 +147,13 @@ export default function ArticleSearch() {
           {/* Results Card */}
           <Card>
             <CardHeader>
-              <CardTitle>Search Results</CardTitle>
+              <CardTitle>Результаты поиска</CardTitle>
             </CardHeader>
             <CardContent>
               {!selectedResult && searchResults.length === 0 && !isSearching && (
                 <div className="text-center py-8 text-muted-foreground">
                   <i className="fas fa-search text-4xl mb-4"></i>
-                  <p>Enter an article code to search</p>
+                  <p>Введите артикул для поиска</p>
                 </div>
               )}
 
@@ -163,37 +163,37 @@ export default function ArticleSearch() {
                     <div>
                       <Badge className="bg-success text-success-foreground mb-2">
                         <i className="fas fa-check mr-1"></i>
-                        Match Found
+                        Найдено совпадение
                       </Badge>
                       <h4 className="font-mono font-semibold text-lg text-foreground">{selectedResult.smart}</h4>
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Article:</span>
+                      <span className="text-muted-foreground">Артикул:</span>
                       <span className="font-mono font-medium">{selectedResult.article}</span>
                     </div>
                     {selectedResult.brand && (
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Brand:</span>
+                        <span className="text-muted-foreground">Бренд:</span>
                         <span className="font-medium">{selectedResult.brand}</span>
                       </div>
                     )}
                     {selectedResult.description && (
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Description:</span>
+                        <span className="text-muted-foreground">Описание:</span>
                         <span className="font-medium">{selectedResult.description}</span>
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Current Stock:</span>
+                      <span className="text-muted-foreground">Текущий остаток:</span>
                       <span className="font-mono font-semibold text-success">{selectedResult.currentStock}</span>
                     </div>
                   </div>
                   <div className="flex gap-2 mt-4">
                     <Button className="flex-1" data-testid="button-add-movement">
                       <i className="fas fa-plus mr-2"></i>
-                      Add Movement
+                      Добавить движение
                     </Button>
                     <Button variant="secondary" size="icon" data-testid="button-view-history">
                       <i className="fas fa-history"></i>

@@ -23,17 +23,17 @@ export default function StockLevels() {
   );
 
   const getStockStatus = (qty: number) => {
-    if (qty === 0) return { label: "Out of Stock", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
-    if (qty <= 10) return { label: "Low Stock", variant: "secondary" as const, icon: "fas fa-triangle-exclamation" };
-    return { label: "In Stock", variant: "default" as const, icon: "fas fa-circle" };
+    if (qty === 0) return { label: "Нет в наличии", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
+    if (qty <= 10) return { label: "Мало", variant: "secondary" as const, icon: "fas fa-triangle-exclamation" };
+    return { label: "В наличии", variant: "default" as const, icon: "fas fa-circle" };
   };
 
   return (
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Stock Levels</h2>
-          <p className="text-sm text-muted-foreground mt-1">Current inventory levels from inventory.stock VIEW</p>
+          <h2 className="text-2xl font-bold text-foreground">Остатки</h2>
+          <p className="text-sm text-muted-foreground mt-1">Текущие остатки из представления inventory.stock</p>
         </div>
       </header>
 
@@ -41,11 +41,11 @@ export default function StockLevels() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>Current Stock Levels</CardTitle>
+              <CardTitle>Текущие остатки</CardTitle>
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <Input
-                    placeholder="Filter articles..."
+                    placeholder="Фильтр артикулов..."
                     className="w-48 pl-9 text-sm"
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
@@ -55,7 +55,7 @@ export default function StockLevels() {
                 </div>
                 <Button variant="secondary" size="sm" data-testid="button-export-stock">
                   <i className="fas fa-download mr-2"></i>
-                  Export
+                  Экспорт
                 </Button>
               </div>
             </div>
@@ -67,26 +67,26 @@ export default function StockLevels() {
                   <TableRow>
                     <TableHead className="w-[150px]">
                       <Button variant="ghost" size="sm" className="h-auto p-0 font-medium" data-testid="button-sort-smart">
-                        SMART Code
+                        SMART код
                         <i className="fas fa-sort text-xs ml-2"></i>
                       </Button>
                     </TableHead>
                     <TableHead>
                       <Button variant="ghost" size="sm" className="h-auto p-0 font-medium" data-testid="button-sort-article">
-                        Article
+                        Артикул
                         <i className="fas fa-sort text-xs ml-2"></i>
                       </Button>
                     </TableHead>
-                    <TableHead>Brand</TableHead>
-                    <TableHead>Description</TableHead>
+                    <TableHead>Бренд</TableHead>
+                    <TableHead>Описание</TableHead>
                     <TableHead className="text-right">
                       <Button variant="ghost" size="sm" className="h-auto p-0 font-medium ml-auto" data-testid="button-sort-qty">
-                        Stock Qty
+                        Кол-во
                         <i className="fas fa-sort text-xs ml-2"></i>
                       </Button>
                     </TableHead>
-                    <TableHead className="text-center">Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="text-center">Статус</TableHead>
+                    <TableHead className="text-right">Действия</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -105,7 +105,7 @@ export default function StockLevels() {
                   ) : filteredStock.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                        {filter ? "No stock items match your filter" : "No stock data available"}
+                        {filter ? "Нет совпадений с фильтром" : "Нет данных об остатках"}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -155,8 +155,8 @@ export default function StockLevels() {
             {!isLoading && (
               <div className="flex items-center justify-between px-2 py-4">
                 <div className="text-sm text-muted-foreground">
-                  Showing <span className="font-semibold text-foreground">{filteredStock.length}</span> items
-                  {filter && <span> (filtered from {(stockLevels as StockLevel[] || []).length} total)</span>}
+                  Показано <span className="font-semibold text-foreground">{filteredStock.length}</span> позиций
+                  {filter && <span> (отфильтровано из {(stockLevels as StockLevel[] || []).length} всего)</span>}
                 </div>
               </div>
             )}

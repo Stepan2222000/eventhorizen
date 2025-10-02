@@ -23,9 +23,9 @@ export function DisambiguationModal({
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-foreground">Select SMART Code</h3>
+              <h3 className="text-lg font-semibold text-foreground">Выберите SMART код</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                Multiple matches found for article: <span className="font-mono font-semibold">{searchQuery}</span>
+                Найдено несколько совпадений для артикула: <span className="font-mono font-semibold">{searchQuery}</span>
               </p>
             </div>
           </DialogTitle>
@@ -52,7 +52,7 @@ export function DisambiguationModal({
               )}
               <div className="flex gap-4 text-xs text-muted-foreground">
                 <div>
-                  <span className="font-semibold">Stock:</span>
+                  <span className="font-semibold">Остаток:</span>
                   <span className="font-mono ml-1">{match.currentStock}</span>
                 </div>
               </div>
@@ -62,7 +62,7 @@ export function DisambiguationModal({
         
         <div className="border-t border-border pt-4">
           <Button variant="outline" onClick={onClose} className="w-full" data-testid="button-cancel-disambiguation">
-            Cancel
+            Отмена
           </Button>
         </div>
       </DialogContent>

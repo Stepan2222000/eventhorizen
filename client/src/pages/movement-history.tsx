@@ -33,7 +33,7 @@ export default function MovementHistory() {
   };
 
   const formatDateTime = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
+    return new Date(dateString).toLocaleString('ru-RU', {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
@@ -47,8 +47,8 @@ export default function MovementHistory() {
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Movement History</h2>
-          <p className="text-sm text-muted-foreground mt-1">Complete audit trail of all inventory movements</p>
+          <h2 className="text-2xl font-bold text-foreground">История движений</h2>
+          <p className="text-sm text-muted-foreground mt-1">Полный аудит всех движений товаров</p>
         </div>
       </header>
 
@@ -56,10 +56,10 @@ export default function MovementHistory() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>All Movements</CardTitle>
+              <CardTitle>Все движения</CardTitle>
               <div className="relative">
                 <Input
-                  placeholder="Filter movements..."
+                  placeholder="Фильтр движений..."
                   className="w-64 pl-9 text-sm"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
@@ -74,12 +74,12 @@ export default function MovementHistory() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[140px]">Date/Time</TableHead>
+                    <TableHead className="w-[140px]">Дата/Время</TableHead>
                     <TableHead className="w-[130px]">SMART</TableHead>
-                    <TableHead className="w-[150px]">Article</TableHead>
-                    <TableHead className="text-right w-[80px]">Qty Δ</TableHead>
-                    <TableHead className="w-[100px]">Reason</TableHead>
-                    <TableHead>Note</TableHead>
+                    <TableHead className="w-[150px]">Артикул</TableHead>
+                    <TableHead className="text-right w-[80px]">Кол-во Δ</TableHead>
+                    <TableHead className="w-[100px]">Причина</TableHead>
+                    <TableHead>Примечание</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -97,7 +97,7 @@ export default function MovementHistory() {
                   ) : filteredMovements.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                        {filter ? "No movements match your filter" : "No movements recorded"}
+                        {filter ? "Нет совпадений с фильтром" : "Нет записанных движений"}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -137,8 +137,8 @@ export default function MovementHistory() {
             {!isLoading && (
               <div className="flex items-center justify-between px-2 py-4">
                 <div className="text-sm text-muted-foreground">
-                  Showing <span className="font-semibold text-foreground">{filteredMovements.length}</span> movements
-                  {filter && <span> (filtered from {(movements as Movement[] || []).length} total)</span>}
+                  Показано <span className="font-semibold text-foreground">{filteredMovements.length}</span> движений
+                  {filter && <span> (отфильтровано из {(movements as Movement[] || []).length} всего)</span>}
                 </div>
               </div>
             )}

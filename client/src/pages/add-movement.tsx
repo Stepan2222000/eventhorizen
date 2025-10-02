@@ -52,8 +52,8 @@ export default function AddMovement() {
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       
       toast({
-        title: "Movement recorded",
-        description: "Inventory movement has been successfully recorded",
+        title: "Движение записано",
+        description: "Движение товара успешно зарегистрировано",
       });
       
       form.reset();
@@ -61,8 +61,8 @@ export default function AddMovement() {
     },
     onError: (error) => {
       toast({
-        title: "Failed to record movement",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: "Ошибка записи движения",
+        description: error instanceof Error ? error.message : "Произошла ошибка",
         variant: "destructive",
       });
     },
@@ -89,8 +89,8 @@ export default function AddMovement() {
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Add Movement</h2>
-          <p className="text-sm text-muted-foreground mt-1">Record inventory changes instantly</p>
+          <h2 className="text-2xl font-bold text-foreground">Добавить движение</h2>
+          <p className="text-sm text-muted-foreground mt-1">Зарегистрируйте изменение остатков</p>
         </div>
       </header>
 
@@ -100,8 +100,8 @@ export default function AddMovement() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-foreground">Movement Entry</div>
-                  <p className="text-sm text-muted-foreground mt-1">Enter inventory movement details</p>
+                  <div className="text-lg font-semibold text-foreground">Ввод движения</div>
+                  <p className="text-sm text-muted-foreground mt-1">Введите данные движения товара</p>
                 </div>
                 <i className="fas fa-plus-circle text-muted-foreground text-xl"></i>
               </CardTitle>
@@ -115,7 +115,7 @@ export default function AddMovement() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          SMART Code <span className="text-destructive">*</span>
+                          SMART код <span className="text-destructive">*</span>
                         </FormLabel>
                         <FormControl>
                           <Input 
@@ -136,11 +136,11 @@ export default function AddMovement() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          Article (as entered) <span className="text-destructive">*</span>
+                          Артикул (как введено) <span className="text-destructive">*</span>
                         </FormLabel>
                         <FormControl>
                           <Input 
-                            placeholder="Original article format" 
+                            placeholder="Исходный формат артикула" 
                             className="font-mono" 
                             {...field}
                             data-testid="input-article"
@@ -154,7 +154,7 @@ export default function AddMovement() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>
-                        Quantity Change <span className="text-destructive">*</span>
+                        Изменение количества <span className="text-destructive">*</span>
                       </Label>
                       <div className="flex gap-2">
                         <Button 
@@ -195,12 +195,12 @@ export default function AddMovement() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>
-                            Reason <span className="text-destructive">*</span>
+                            Причина <span className="text-destructive">*</span>
                           </FormLabel>
                           <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger data-testid="select-reason">
-                                <SelectValue placeholder="Select reason" />
+                                <SelectValue placeholder="Выберите причину" />
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
@@ -223,12 +223,12 @@ export default function AddMovement() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          Note <span className="text-muted-foreground font-normal">(optional)</span>
+                          Примечание <span className="text-muted-foreground font-normal">(опционально)</span>
                         </FormLabel>
                         <FormControl>
                           <Textarea
                             rows={3}
-                            placeholder="Additional comments..."
+                            placeholder="Дополнительные комментарии..."
                             className="resize-none"
                             {...field}
                             value={field.value || ""}
@@ -250,12 +250,12 @@ export default function AddMovement() {
                       {createMovementMutation.isPending ? (
                         <>
                           <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                          Recording...
+                          Запись...
                         </>
                       ) : (
                         <>
                           <i className="fas fa-check mr-2"></i>
-                          Record Movement
+                          Записать движение
                         </>
                       )}
                     </Button>
@@ -269,7 +269,7 @@ export default function AddMovement() {
                       data-testid="button-clear-form"
                     >
                       <i className="fas fa-rotate-left mr-2"></i>
-                      Clear
+                      Очистить
                     </Button>
                   </div>
                 </form>

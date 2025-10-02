@@ -41,15 +41,15 @@ export default function BulkImport() {
       
       if (result.imported > 0) {
         toast({
-          title: "Import completed",
-          description: `Successfully imported ${result.imported} movements`,
+          title: "Импорт завершён",
+          description: `Успешно импортировано движений: ${result.imported}`,
         });
       }
     },
     onError: (error) => {
       toast({
-        title: "Import failed",
-        description: error instanceof Error ? error.message : "Failed to process file",
+        title: "Ошибка импорта",
+        description: error instanceof Error ? error.message : "Не удалось обработать файл",
         variant: "destructive",
       });
     },
@@ -58,7 +58,7 @@ export default function BulkImport() {
   const downloadTemplateMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch('/api/import-template');
-      if (!response.ok) throw new Error('Failed to download template');
+      if (!response.ok) throw new Error('Не удалось скачать шаблон');
       
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -73,8 +73,8 @@ export default function BulkImport() {
     },
     onError: (error) => {
       toast({
-        title: "Download failed",
-        description: error instanceof Error ? error.message : "Failed to download template",
+        title: "Ошибка загрузки",
+        description: error instanceof Error ? error.message : "Не удалось скачать шаблон",
         variant: "destructive",
       });
     },
@@ -110,8 +110,8 @@ export default function BulkImport() {
     
     if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls|csv)$/i)) {
       toast({
-        title: "Invalid file type",
-        description: "Please select an Excel (.xlsx, .xls) or CSV file",
+        title: "Неверный тип файла",
+        description: "Пожалуйста, выберите Excel (.xlsx, .xls) или CSV файл",
         variant: "destructive",
       });
       return;
@@ -136,8 +136,8 @@ export default function BulkImport() {
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Bulk Import</h2>
-          <p className="text-sm text-muted-foreground mt-1">Upload Excel/CSV files for batch inventory operations</p>
+          <h2 className="text-2xl font-bold text-foreground">Массовая загрузка</h2>
+          <p className="text-sm text-muted-foreground mt-1">Загрузка Excel/CSV файлов для массовых операций</p>
         </div>
       </header>
 
@@ -148,8 +148,8 @@ export default function BulkImport() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-foreground">Upload File</div>
-                  <p className="text-sm text-muted-foreground mt-1">Select Excel or CSV file for import</p>
+                  <div className="text-lg font-semibold text-foreground">Загрузка файла</div>
+                  <p className="text-sm text-muted-foreground mt-1">Выберите Excel или CSV файл для импорта</p>
                 </div>
                 <i className="fas fa-file-import text-muted-foreground text-xl"></i>
               </CardTitle>
@@ -169,14 +169,14 @@ export default function BulkImport() {
               >
                 <i className="fas fa-cloud-arrow-up text-4xl text-muted-foreground mb-3"></i>
                 <p className="text-sm font-medium text-foreground mb-1">
-                  {selectedFile ? selectedFile.name : 'Drop file here or click to browse'}
+                  {selectedFile ? selectedFile.name : 'Перетащите файл сюда или нажмите для выбора'}
                 </p>
                 <p className="text-xs text-muted-foreground mb-4">
-                  Excel (.xlsx, .xls) or CSV files only
+                  Только Excel (.xlsx, .xls) или CSV файлы
                 </p>
                 <Button variant="secondary" size="sm" data-testid="button-browse-files">
                   <i className="fas fa-folder-open mr-2"></i>
-                  Browse Files
+                  Выбрать файлы
                 </Button>
                 
                 <input
@@ -196,7 +196,7 @@ export default function BulkImport() {
                     <div>
                       <div className="font-medium text-sm">{selectedFile.name}</div>
                       <div className="text-xs text-muted-foreground">
-                        {(selectedFile.size / 1024).toFixed(1)} KB
+                        {(selectedFile.size / 1024).toFixed(1)} КБ
                       </div>
                     </div>
                   </div>
@@ -208,12 +208,12 @@ export default function BulkImport() {
                     {importMutation.isPending ? (
                       <>
                         <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                        Processing...
+                        Обработка...
                       </>
                     ) : (
                       <>
                         <i className="fas fa-upload mr-2"></i>
-                        Start Import
+                        Начать импорт
                       </>
                     )}
                   </Button>
@@ -224,8 +224,8 @@ export default function BulkImport() {
               {importMutation.isPending && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span>Processing file...</span>
-                    <span>Please wait</span>
+                    <span>Обработка файла...</span>
+                    <span>Пожалуйста, подождите</span>
                   </div>
                   <Progress value={undefined} className="h-2" />
                 </div>
@@ -239,34 +239,34 @@ export default function BulkImport() {
               <CardHeader>
                 <CardTitle className="text-sm flex items-center gap-2">
                   <i className="fas fa-info-circle text-primary"></i>
-                  Expected Format
+                  Ожидаемый формат
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3 text-xs">
                   <div className="flex justify-between py-2 border-b">
-                    <span className="font-medium">Column</span>
-                    <span className="font-medium">Required</span>
+                    <span className="font-medium">Колонка</span>
+                    <span className="font-medium">Обязательность</span>
                   </div>
                   <div className="flex justify-between">
                     <span>article</span>
-                    <Badge variant="destructive" className="text-xs">Required</Badge>
+                    <Badge variant="destructive" className="text-xs">Обязательно</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span>qty_delta</span>
-                    <Badge variant="destructive" className="text-xs">Required</Badge>
+                    <Badge variant="destructive" className="text-xs">Обязательно</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span>reason</span>
-                    <Badge variant="destructive" className="text-xs">Required</Badge>
+                    <Badge variant="destructive" className="text-xs">Обязательно</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span>note</span>
-                    <Badge variant="secondary" className="text-xs">Optional</Badge>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span>smart</span>
-                    <Badge variant="secondary" className="text-xs">Optional</Badge>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
                   </div>
                 </div>
               </CardContent>
@@ -274,11 +274,11 @@ export default function BulkImport() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-sm">Download Template</CardTitle>
+                <CardTitle className="text-sm">Скачать шаблон</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-xs text-muted-foreground">
-                  Download a pre-formatted Excel template with sample data and column headers.
+                  Скачайте готовый шаблон Excel с примерами данных и заголовками колонок.
                 </p>
                 <Button 
                   variant="outline" 
@@ -290,12 +290,12 @@ export default function BulkImport() {
                   {downloadTemplateMutation.isPending ? (
                     <>
                       <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                      Downloading...
+                      Загрузка...
                     </>
                   ) : (
                     <>
                       <i className="fas fa-download mr-2"></i>
-                      Download Template
+                      Скачать шаблон
                     </>
                   )}
                 </Button>
@@ -315,22 +315,22 @@ export default function BulkImport() {
                   ) : (
                     <i className="fas fa-circle-xmark text-destructive text-xl"></i>
                   )}
-                  Import Results
+                  Результаты импорта
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-3 gap-4">
                   <div className="text-center p-4 bg-muted rounded-lg">
                     <div className="text-2xl font-bold font-mono">{importResult.totalRows}</div>
-                    <div className="text-sm text-muted-foreground">Total Rows</div>
+                    <div className="text-sm text-muted-foreground">Всего строк</div>
                   </div>
                   <div className="text-center p-4 bg-success/10 rounded-lg">
                     <div className="text-2xl font-bold font-mono text-success">{importResult.imported}</div>
-                    <div className="text-sm text-muted-foreground">Imported</div>
+                    <div className="text-sm text-muted-foreground">Импортировано</div>
                   </div>
                   <div className="text-center p-4 bg-destructive/10 rounded-lg">
                     <div className="text-2xl font-bold font-mono text-destructive">{importResult.errors.length}</div>
-                    <div className="text-sm text-muted-foreground">Errors</div>
+                    <div className="text-sm text-muted-foreground">Ошибок</div>
                   </div>
                 </div>
 
@@ -338,13 +338,13 @@ export default function BulkImport() {
                   <div className="space-y-2">
                     <h4 className="font-semibold text-sm flex items-center gap-2">
                       <i className="fas fa-exclamation-triangle text-destructive"></i>
-                      Import Errors
+                      Ошибки импорта
                     </h4>
                     <div className="space-y-2 max-h-60 overflow-y-auto">
                       {importResult.errors.map((error, index) => (
                         <Alert key={index} variant="destructive">
                           <AlertDescription>
-                            <strong>Row {error.row}:</strong> {error.error}
+                            <strong>Строка {error.row}:</strong> {error.error}
                             <div className="text-xs mt-1 font-mono">
                               {JSON.stringify(error.data)}
                             </div>
@@ -359,7 +359,7 @@ export default function BulkImport() {
                   <Alert>
                     <i className="fas fa-circle-check"></i>
                     <AlertDescription>
-                      Successfully imported {importResult.imported} movement{importResult.imported !== 1 ? 's' : ''} into the inventory system.
+                      Успешно импортировано: {importResult.imported} {importResult.imported === 1 ? 'движение' : importResult.imported < 5 ? 'движения' : 'движений'} в систему учёта.
                     </AlertDescription>
                   </Alert>
                 )}
