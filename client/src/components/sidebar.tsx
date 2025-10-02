@@ -2,12 +2,12 @@ import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: 'fas fa-chart-line' },
-  { name: 'Article Search', href: '/search', icon: 'fas fa-magnifying-glass' },
-  { name: 'Add Movement', href: '/movement', icon: 'fas fa-plus-circle' },
-  { name: 'Stock Levels', href: '/stock', icon: 'fas fa-warehouse' },
-  { name: 'Movement History', href: '/history', icon: 'fas fa-clock-rotate-left' },
-  { name: 'Bulk Import', href: '/import', icon: 'fas fa-file-import' },
+  { name: 'Главная', href: '/', icon: 'fas fa-chart-line' },
+  { name: 'Поиск артикулов', href: '/search', icon: 'fas fa-magnifying-glass' },
+  { name: 'Добавить движение', href: '/movement', icon: 'fas fa-plus-circle' },
+  { name: 'Остатки', href: '/stock', icon: 'fas fa-warehouse' },
+  { name: 'История движений', href: '/history', icon: 'fas fa-clock-rotate-left' },
+  { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
 ];
 
 export function Sidebar() {
@@ -21,8 +21,8 @@ export function Sidebar() {
             <i className="fas fa-boxes-stacked text-white text-lg"></i>
           </div>
           <div>
-            <h1 className="text-lg font-bold text-foreground">SMART Inventory</h1>
-            <p className="text-xs text-muted-foreground">Management System</p>
+            <h1 className="text-lg font-bold text-foreground">SMART Инвентаризация</h1>
+            <p className="text-xs text-muted-foreground">Система учёта</p>
           </div>
         </div>
       </div>
@@ -50,8 +50,8 @@ export function Sidebar() {
             <div className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{animationDelay: '0.2s'}}></div>
           </div>
           <div className="flex-1 text-xs">
-            <div className="text-muted-foreground">DB Status</div>
-            <div className="font-medium font-mono text-foreground">Connected</div>
+            <div className="text-muted-foreground">Статус БД</div>
+            <div className="font-medium font-mono text-foreground">Подключено</div>
           </div>
         </div>
       </div>

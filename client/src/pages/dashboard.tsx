@@ -30,9 +30,9 @@ export default function Dashboard() {
   });
 
   const getStockStatus = (qty: number) => {
-    if (qty === 0) return { label: "Out of Stock", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
-    if (qty <= 10) return { label: "Low Stock", variant: "secondary" as const, icon: "fas fa-triangle-exclamation" };
-    return { label: "In Stock", variant: "default" as const, icon: "fas fa-circle" };
+    if (qty === 0) return { label: "Нет в наличии", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
+    if (qty <= 10) return { label: "Мало", variant: "secondary" as const, icon: "fas fa-triangle-exclamation" };
+    return { label: "В наличии", variant: "default" as const, icon: "fas fa-circle" };
   };
 
   const getReasonVariant = (reason: string) => {
@@ -52,14 +52,14 @@ export default function Dashboard() {
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
-            <p className="text-sm text-muted-foreground mt-1">Real-time inventory overview and operations</p>
+            <h2 className="text-2xl font-bold text-foreground">Главная</h2>
+            <p className="text-sm text-muted-foreground mt-1">Общий обзор и операции в реальном времени</p>
           </div>
           <div className="flex items-center gap-4">
             <div className="relative">
               <Input 
                 type="text" 
-                placeholder="Quick search article..." 
+                placeholder="Быстрый поиск артикула..." 
                 className="w-64 pl-10 font-mono" 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -70,7 +70,7 @@ export default function Dashboard() {
             <Link href="/movement">
               <Button className="gap-2" data-testid="button-quick-add">
                 <i className="fas fa-plus"></i>
-                Quick Add
+                Быстрое добавление
               </Button>
             </Link>
           </div>
@@ -88,7 +88,7 @@ export default function Dashboard() {
                 </div>
                 <Badge variant="secondary" className="bg-success/10 text-success">
                   <i className="fas fa-arrow-up mr-1"></i>
-                  Active
+                  Активно
                 </Badge>
               </div>
               {statsLoading ? (
@@ -96,7 +96,7 @@ export default function Dashboard() {
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.totalArticles || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">Total Articles</p>
+              <p className="text-sm text-muted-foreground">Всего артикулов</p>
             </CardContent>
           </Card>
 
@@ -108,7 +108,7 @@ export default function Dashboard() {
                 </div>
                 <Badge variant="secondary" className="bg-success/10 text-success">
                   <i className="fas fa-check mr-1"></i>
-                  Active
+                  Активно
                 </Badge>
               </div>
               {statsLoading ? (
@@ -116,7 +116,7 @@ export default function Dashboard() {
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.inStock || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">In Stock</p>
+              <p className="text-sm text-muted-foreground">В наличии</p>
             </CardContent>
           </Card>
 
@@ -127,7 +127,7 @@ export default function Dashboard() {
                   <i className="fas fa-clock text-secondary text-xl"></i>
                 </div>
                 <Badge variant="secondary" className="bg-muted text-muted-foreground">
-                  Today
+                  Сегодня
                 </Badge>
               </div>
               {statsLoading ? (
@@ -135,7 +135,7 @@ export default function Dashboard() {
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.movementsToday || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">Movements Today</p>
+              <p className="text-sm text-muted-foreground">Движений сегодня</p>
             </CardContent>
           </Card>
 
@@ -147,7 +147,7 @@ export default function Dashboard() {
                 </div>
                 <Badge variant="destructive" className="bg-destructive/10 text-destructive">
                   <i className="fas fa-arrow-down mr-1"></i>
-                  Alert
+                  Внимание
                 </Badge>
               </div>
               {statsLoading ? (
@@ -155,7 +155,7 @@ export default function Dashboard() {
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.lowStockAlerts || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">Low Stock Alerts</p>
+              <p className="text-sm text-muted-foreground">Критический остаток</p>
             </CardContent>
           </Card>
         </div>
@@ -166,12 +166,12 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-foreground">Current Stock Levels</div>
-                  <CardDescription>Top stock items overview</CardDescription>
+                  <div className="text-lg font-semibold text-foreground">Текущие остатки</div>
+                  <CardDescription>Топ позиций на складе</CardDescription>
                 </div>
                 <Link href="/stock">
                   <Button variant="ghost" size="sm" data-testid="link-view-all-stock">
-                    View All
+                    Все остатки
                     <i className="fas fa-arrow-right ml-2"></i>
                   </Button>
                 </Link>
@@ -220,12 +220,12 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 <div>
-                  <div className="text-lg font-semibold text-foreground">Recent Movements</div>
-                  <CardDescription>Latest inventory changes</CardDescription>
+                  <div className="text-lg font-semibold text-foreground">Последние движения</div>
+                  <CardDescription>Недавние изменения остатков</CardDescription>
                 </div>
                 <Link href="/history">
                   <Button variant="ghost" size="sm" data-testid="link-view-all-movements">
-                    View All
+                    Вся история
                     <i className="fas fa-arrow-right ml-2"></i>
                   </Button>
                 </Link>
