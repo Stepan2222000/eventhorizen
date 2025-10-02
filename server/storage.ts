@@ -13,7 +13,9 @@ import type {
   SafeDbConnection,
   InsertDbConnection,
   DbConnectionTest,
-  DbTablesResult
+  DbTablesResult,
+  ConfigureConnectionPayload,
+  ConnectionRole
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import { neon } from "@neondatabase/serverless";
@@ -45,6 +47,10 @@ export interface IStorage {
   deleteDbConnection(id: number): Promise<void>;
   testDbConnection(connection: InsertDbConnection): Promise<DbConnectionTest>;
   getDbTables(connectionId: number): Promise<DbTablesResult>;
+  configureConnection(payload: ConfigureConnectionPayload): Promise<SafeDbConnection>;
+  getActiveConnection(role: ConnectionRole): Promise<SafeDbConnection | null>;
+  getTableColumns(connectionId: number, tableName: string): Promise<Array<{name: string, type: string}>>;
+  createDefaultConnections(): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -413,6 +419,194 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting DB tables:', error);
       throw new Error(error instanceof Error ? error.message : 'Failed to get tables');
+    }
+  }
+
+  async configureConnection(payload: ConfigureConnectionPayload): Promise<SafeDbConnection> {
+    try {
+      const { connectionId, role, tableName, fieldMapping } = payload;
+      
+      // Deactivate other connections with the same role
+      if (role) {
+        await inventoryDb
+          .update(dbConnections)
+          .set({ isActive: false })
+          .where(and(
+            eq(dbConnections.role, role),
+            sql`${dbConnections.id} != ${connectionId}`
+          ));
+      }
+      
+      // Update connection configuration
+      const result = await inventoryDb
+        .update(dbConnections)
+        .set({
+          role,
+          tableName,
+          fieldMapping: fieldMapping as any,
+          isActive: role ? true : false,
+          updatedAt: new Date(),
+        })
+        .where(eq(dbConnections.id, connectionId))
+        .returning();
+      
+      if (!result.length) {
+        throw new Error('Connection not found');
+      }
+      
+      const { password, ...safe } = result[0];
+      return safe;
+    } catch (error) {
+      console.error('Error configuring connection:', error);
+      throw new Error(error instanceof Error ? error.message : 'Failed to configure connection');
+    }
+  }
+
+  async getActiveConnection(role: ConnectionRole): Promise<SafeDbConnection | null> {
+    try {
+      if (!role) return null;
+      
+      const result = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(and(
+          eq(dbConnections.role, role),
+          eq(dbConnections.isActive, true)
+        ))
+        .limit(1);
+      
+      if (!result.length) return null;
+      
+      const { password, ...safe } = result[0];
+      return safe;
+    } catch (error) {
+      console.error('Error getting active connection:', error);
+      throw new Error('Failed to get active connection');
+    }
+  }
+
+  async getTableColumns(connectionId: number, tableName: string): Promise<Array<{name: string, type: string}>> {
+    try {
+      // Get connection details
+      const connections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, connectionId))
+        .limit(1);
+      
+      if (!connections.length) {
+        throw new Error('Connection not found');
+      }
+      
+      const connection = connections[0];
+      
+      // Build connection string
+      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
+      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
+      
+      // Connect and get columns
+      const testDb = neon(connectionString);
+      
+      // Parse schema and table name
+      const [schema, table] = tableName.includes('.') 
+        ? tableName.split('.') 
+        : ['public', tableName];
+      
+      const result = await testDb`
+        SELECT 
+          column_name as name,
+          data_type as type
+        FROM information_schema.columns 
+        WHERE table_schema = ${schema} AND table_name = ${table}
+        ORDER BY ordinal_position
+      `;
+      
+      return result.map((row: any) => ({
+        name: row.name,
+        type: row.type,
+      }));
+    } catch (error) {
+      console.error('Error getting table columns:', error);
+      throw new Error(error instanceof Error ? error.message : 'Failed to get columns');
+    }
+  }
+
+  async createDefaultConnections(): Promise<void> {
+    try {
+      // Check if default connections already exist
+      const existing = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(sql`${dbConnections.name} LIKE 'По умолчанию%'`);
+      
+      if (existing.length > 0) {
+        console.log('Default connections already exist, skipping...');
+        return;
+      }
+
+      // Get DATABASE_URL from environment
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) {
+        console.log('DATABASE_URL not found, skipping default connections');
+        return;
+      }
+
+      // Parse DATABASE_URL (format: postgresql://user:password@host:port/database)
+      const url = new URL(dbUrl);
+      const host = url.hostname;
+      const port = parseInt(url.port) || 5432;
+      const database = url.pathname.slice(1);
+      const username = url.username;
+      const password = url.password;
+
+      // Create SMART connection
+      await inventoryDb.insert(dbConnections).values({
+        name: 'По умолчанию (SMART)',
+        host,
+        port,
+        database,
+        username,
+        password,
+        role: 'smart',
+        tableName: 'public.smart',
+        fieldMapping: {
+          smart: 'smart',
+          articles: 'articles',
+          name: 'name',
+          brand: 'brand',
+          description: 'description',
+        } as any,
+        isActive: true,
+        updatedAt: new Date(),
+      });
+
+      // Create Inventory connection
+      await inventoryDb.insert(dbConnections).values({
+        name: 'По умолчанию (Учёт)',
+        host,
+        port,
+        database,
+        username,
+        password,
+        role: 'inventory',
+        tableName: 'inventory.movements',
+        fieldMapping: {
+          id: 'id',
+          smart: 'smart',
+          article: 'article',
+          qtyDelta: 'qty_delta',
+          reason: 'reason',
+          note: 'note',
+          createdAt: 'created_at',
+        } as any,
+        isActive: true,
+        updatedAt: new Date(),
+      });
+
+      console.log('Default connections created successfully');
+    } catch (error) {
+      console.error('Error creating default connections:', error);
+      // Don't throw, just log - this is optional
     }
   }
 }

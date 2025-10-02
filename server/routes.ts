@@ -13,6 +13,9 @@ const upload = multer({ storage: multer.memoryStorage() });
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize database
   await initializeInventoryDb();
+  
+  // Create default connections if they don't exist
+  await storage.createDefaultConnections();
 
   // Search articles by normalized input
   app.get("/api/articles/search", async (req, res) => {
@@ -319,6 +322,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ error: "Failed to get tables" });
       }
+    }
+  });
+
+  app.post("/api/db-connections/:id/configure", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { role, tableName, fieldMapping } = req.body;
+      
+      const result = await storage.configureConnection({
+        connectionId: id,
+        role,
+        tableName,
+        fieldMapping,
+      });
+      
+      res.json(result);
+    } catch (error) {
+      console.error("Configure connection error:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to configure connection" });
+      }
+    }
+  });
+
+  app.get("/api/db-connections/:id/columns", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { tableName } = req.query;
+      
+      if (!tableName || typeof tableName !== 'string') {
+        return res.status(400).json({ error: "tableName query parameter is required" });
+      }
+      
+      const columns = await storage.getTableColumns(id, tableName);
+      res.json({ columns });
+    } catch (error) {
+      console.error("Get table columns error:", error);
+      if (error instanceof Error) {
+        res.status(400).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Failed to get columns" });
+      }
+    }
+  });
+
+  app.get("/api/db-connections/active/:role", async (req, res) => {
+    try {
+      const { role } = req.params;
+      
+      if (role !== 'smart' && role !== 'inventory') {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+      
+      const connection = await storage.getActiveConnection(role);
+      res.json(connection);
+    } catch (error) {
+      console.error("Get active connection error:", error);
+      res.status(500).json({ error: "Failed to get active connection" });
     }
   });
 
