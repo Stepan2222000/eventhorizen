@@ -12,8 +12,9 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertMovementSchema } from "@shared/schema";
-import type { InsertMovement, Reason } from "@shared/schema";
+import type { InsertMovement, Reason, ArticleSearchResult } from "@shared/schema";
 import { z } from "zod";
+import { DisambiguationModal } from "@/components/disambiguation-modal";
 
 const formSchema = insertMovementSchema.extend({
   qtyDelta: z.number().int().min(-999999).max(999999),
@@ -23,6 +24,10 @@ type FormData = z.infer<typeof formSchema>;
 
 export default function AddMovement() {
   const [qtyInput, setQtyInput] = useState(0);
+  const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([]);
+  const [showDisambiguation, setShowDisambiguation] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [lastSearchedArticle, setLastSearchedArticle] = useState<string>("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -41,6 +46,49 @@ export default function AddMovement() {
     queryKey: ["/api/reasons"],
   });
 
+  const searchArticleMutation = useMutation({
+    mutationFn: async (query: string) => {
+      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query)}`);
+      return response.json();
+    },
+    onSuccess: (results: ArticleSearchResult[], variables) => {
+      // Ignore results if article has changed since search was initiated
+      const currentArticle = form.getValues('article');
+      if (currentArticle.trim() !== variables.trim()) {
+        setIsSearching(false);
+        return;
+      }
+      
+      setSearchResults(results);
+      setIsSearching(false);
+      
+      if (results.length === 0) {
+        toast({
+          title: "Совпадений не найдено",
+          description: `SMART код для артикула не найден`,
+          variant: "destructive",
+        });
+        form.setValue('smart', '');
+      } else if (results.length === 1) {
+        form.setValue('smart', results[0].smart);
+        toast({
+          title: "SMART код найден",
+          description: `Автоматически подставлен: ${results[0].smart}`,
+        });
+      } else {
+        setShowDisambiguation(true);
+      }
+    },
+    onError: (error) => {
+      setIsSearching(false);
+      toast({
+        title: "Ошибка поиска",
+        description: error instanceof Error ? error.message : "Не удалось выполнить поиск",
+        variant: "destructive",
+      });
+    },
+  });
+
   const createMovementMutation = useMutation({
     mutationFn: async (data: FormData) => {
       const response = await apiRequest("POST", "/api/movements", data);
@@ -56,8 +104,13 @@ export default function AddMovement() {
         description: "Движение товара успешно зарегистрировано",
       });
       
+      // Reset all form and search state
       form.reset();
       setQtyInput(0);
+      setSearchResults([]);
+      setShowDisambiguation(false);
+      setIsSearching(false);
+      setLastSearchedArticle("");
     },
     onError: (error) => {
       toast({
@@ -83,6 +136,31 @@ export default function AddMovement() {
   const decrementQty = () => {
     setQtyInput(prev => prev - 1);
     form.setValue('qtyDelta', qtyInput - 1);
+  };
+
+  const handleArticleSearch = () => {
+    const article = form.getValues('article');
+    if (!article.trim()) {
+      toast({
+        title: "Введите артикул",
+        description: "Для поиска SMART кода необходимо ввести артикул",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsSearching(true);
+    setSearchResults([]);
+    searchArticleMutation.mutate(article.trim());
+  };
+
+  const handleSelectMatch = (result: ArticleSearchResult) => {
+    form.setValue('smart', result.smart);
+    setShowDisambiguation(false);
+    toast({
+      title: "SMART код выбран",
+      description: `Выбран: ${result.smart}`,
+    });
   };
 
   return (
@@ -111,6 +189,62 @@ export default function AddMovement() {
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
                   <FormField
                     control={form.control}
+                    name="article"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>
+                          Артикул <span className="text-destructive">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <div className="flex gap-2">
+                            <Input 
+                              placeholder="Введите артикул для поиска" 
+                              className="font-mono flex-1" 
+                              {...field}
+                              onChange={(e) => {
+                                field.onChange(e);
+                                // Clear all search state when article changes
+                                form.setValue('smart', '');
+                                setSearchResults([]);
+                                setShowDisambiguation(false);
+                                setIsSearching(false);
+                              }}
+                              data-testid="input-article"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleArticleSearch();
+                                }
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              onClick={handleArticleSearch}
+                              disabled={isSearching}
+                              data-testid="button-search-smart"
+                            >
+                              {isSearching ? (
+                                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                              ) : (
+                                <>
+                                  <i className="fas fa-search mr-2"></i>
+                                  Найти SMART
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </FormControl>
+                        <FormMessage />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          <i className="fas fa-info-circle mr-1"></i>
+                          Введите артикул и нажмите "Найти SMART" или Enter
+                        </p>
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
                     name="smart"
                     render={({ field }) => (
                       <FormItem>
@@ -119,34 +253,20 @@ export default function AddMovement() {
                         </FormLabel>
                         <FormControl>
                           <Input 
-                            placeholder="SMART-XXXXX" 
-                            className="font-mono" 
+                            placeholder="Будет найден автоматически" 
+                            className="font-mono bg-muted" 
                             {...field}
+                            readOnly
                             data-testid="input-smart-code"
                           />
                         </FormControl>
                         <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="article"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Артикул (как введено) <span className="text-destructive">*</span>
-                        </FormLabel>
-                        <FormControl>
-                          <Input 
-                            placeholder="Исходный формат артикула" 
-                            className="font-mono" 
-                            {...field}
-                            data-testid="input-article"
-                          />
-                        </FormControl>
-                        <FormMessage />
+                        {field.value && (
+                          <p className="text-xs text-success mt-1">
+                            <i className="fas fa-check-circle mr-1"></i>
+                            SMART код найден
+                          </p>
+                        )}
                       </FormItem>
                     )}
                   />
@@ -265,6 +385,10 @@ export default function AddMovement() {
                       onClick={() => {
                         form.reset();
                         setQtyInput(0);
+                        setSearchResults([]);
+                        setShowDisambiguation(false);
+                        setIsSearching(false);
+                        setLastSearchedArticle("");
                       }}
                       data-testid="button-clear-form"
                     >
@@ -278,6 +402,14 @@ export default function AddMovement() {
           </Card>
         </div>
       </div>
+
+      <DisambiguationModal
+        isOpen={showDisambiguation}
+        onClose={() => setShowDisambiguation(false)}
+        onSelect={handleSelectMatch}
+        matches={searchResults}
+        searchQuery={form.getValues('article')}
+      />
     </div>
   );
 }
