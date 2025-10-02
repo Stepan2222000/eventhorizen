@@ -8,6 +8,19 @@ This is an internal inventory tracking system that links user-entered article co
 
 Preferred communication style: Simple, everyday language.
 
+## Interface Language
+
+The entire user interface is in Russian (ru-RU), including:
+- Navigation menu (Sidebar): Главная, Поиск артикулов, Добавить движение, Остатки, История движений, Массовая загрузка
+- Page titles, descriptions, and instructions
+- Form labels and placeholders
+- Button labels and actions
+- Table headers and status indicators
+- Toast notifications and error messages
+- Modal dialogs and confirmations
+
+This localization ensures the system is accessible for Russian-speaking users in the internal network.
+
 ## System Architecture
 
 ### Frontend Architecture
