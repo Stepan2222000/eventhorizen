@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, pgSchema, text, varchar, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, pgSchema, text, varchar, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -100,6 +100,10 @@ export const dbConnections = inventorySchema.table("db_connections", {
   username: varchar("username", { length: 255 }).notNull(),
   password: text("password").notNull(),
   ssl: varchar("ssl", { length: 50 }),
+  role: varchar("role", { length: 20 }), // 'smart' | 'inventory' | null
+  tableName: varchar("table_name", { length: 255 }),
+  fieldMapping: jsonb("field_mapping"), // JSON object mapping external fields to system fields
+  isActive: boolean("is_active").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -110,6 +114,7 @@ export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  isActive: true, // managed by backend
 }).extend({
   name: z.string().min(1, "Название обязательно"),
   host: z.string().min(1, "Хост обязателен"),
@@ -118,6 +123,9 @@ export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
   username: z.string().min(1, "Имя пользователя обязательно"),
   password: z.string().min(1, "Пароль обязателен"),
   ssl: z.string().optional().nullable(),
+  role: z.enum(['smart', 'inventory']).optional().nullable(),
+  tableName: z.string().optional().nullable(),
+  fieldMapping: z.any().optional().nullable(), // JSON object
 });
 
 export type InsertDbConnection = z.infer<typeof insertDbConnectionSchema>;
@@ -139,4 +147,33 @@ export type DbTable = {
 export type DbTablesResult = {
   tables: DbTable[];
   connectionName: string;
+};
+
+export type ConnectionRole = 'smart' | 'inventory' | null;
+
+export type SmartFieldMapping = {
+  smart: string;      // field name for SMART code
+  articles: string;   // field name for articles array
+  name?: string;      // optional: field name for product name
+  brand?: string;     // optional: field name for brand
+  description?: string; // optional: field name for description
+};
+
+export type InventoryFieldMapping = {
+  id: string;         // field name for primary key
+  smart: string;      // field name for SMART code
+  article: string;    // field name for article
+  qtyDelta: string;   // field name for quantity delta
+  reason: string;     // field name for reason
+  note?: string;      // optional: field name for note
+  createdAt: string;  // field name for created timestamp
+};
+
+export type FieldMapping = SmartFieldMapping | InventoryFieldMapping | null;
+
+export type ConfigureConnectionPayload = {
+  connectionId: number;
+  role: ConnectionRole;
+  tableName: string;
+  fieldMapping: FieldMapping;
 };
