@@ -11,7 +11,7 @@ Preferred communication style: Simple, everyday language.
 ## Interface Language
 
 The entire user interface is in Russian (ru-RU), including:
-- Navigation menu (Sidebar): Главная, Поиск артикулов, Добавить движение, Остатки, История движений, Массовая загрузка
+- Navigation menu (Sidebar): Главная, Поиск артикулов, Добавить движение, Остатки, История движений, Массовая загрузка, Подключения БД
 - Page titles, descriptions, and instructions
 - Form labels and placeholders
 - Button labels and actions
@@ -47,6 +47,7 @@ This localization ensures the system is accessible for Russian-speaking users in
 - Stock Levels: Current inventory view aggregated from movements
 - Movement History: Complete transaction log
 - Bulk Import: Excel/CSV file upload for batch operations
+- Database Connections: Manage connections to external PostgreSQL databases
 
 ### Backend Architecture
 
@@ -74,6 +75,11 @@ This localization ensures the system is accessible for Russian-speaking users in
 - `POST /api/bulk-import` - Process CSV/Excel uploads
 - `GET /api/reasons` - List valid movement reason codes
 - `GET /api/dashboard/stats` - Summary statistics
+- `GET /api/db-connections` - List database connections (passwords excluded)
+- `POST /api/db-connections` - Create new database connection
+- `DELETE /api/db-connections/:id` - Delete database connection
+- `POST /api/db-connections/test` - Test database connection
+- `POST /api/db-connections/:id/tables` - Get tables from database connection
 
 ### Data Storage Solutions
 
@@ -87,6 +93,7 @@ This localization ensures the system is accessible for Russian-speaking users in
 - `inventory.reasons` table: Fixed lookup table with `code` (PK) and `title` for transaction types (purchase, sale, return, adjust, writeoff)
 - `inventory.movements` table: Transaction log with auto-incrementing `id`, `smart` code, original `article` as entered, `qty_delta` (±integer), `reason` code, optional `note`, and `created_at` timestamp
 - `inventory.stock` view (computed): Aggregates movements by `(article, smart)` to calculate current quantities
+- `inventory.db_connections` table: Database connection credentials with `id` (PK), `name`, `host`, `port`, `database`, `username`, `password` (stored but never exposed to frontend), optional `ssl` mode, and timestamps
 
 **Normalization Strategy:**
 - Normalization applied only for search/matching, never stored
