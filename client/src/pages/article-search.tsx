@@ -1,0 +1,218 @@
+import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { DisambiguationModal } from "@/components/disambiguation-modal";
+import type { ArticleSearchResult } from "@shared/schema";
+
+export default function ArticleSearch() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([]);
+  const [selectedResult, setSelectedResult] = useState<ArticleSearchResult | null>(null);
+  const [showDisambiguation, setShowDisambiguation] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const searchMutation = useMutation({
+    mutationFn: async (query: string) => {
+      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query)}`);
+      return response.json();
+    },
+    onSuccess: (results: ArticleSearchResult[]) => {
+      setSearchResults(results);
+      setIsSearching(false);
+      
+      if (results.length === 0) {
+        toast({
+          title: "No matches found",
+          description: `No SMART codes found for article: ${searchQuery}`,
+          variant: "destructive",
+        });
+      } else if (results.length === 1) {
+        setSelectedResult(results[0]);
+        toast({
+          title: "Match found",
+          description: `Found SMART code: ${results[0].smart}`,
+        });
+      } else {
+        setShowDisambiguation(true);
+      }
+    },
+    onError: (error) => {
+      setIsSearching(false);
+      toast({
+        title: "Search failed",
+        description: error instanceof Error ? error.message : "Failed to search articles",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    setSearchResults([]);
+    setSelectedResult(null);
+    searchMutation.mutate(searchQuery.trim());
+  };
+
+  const handleSelectMatch = (result: ArticleSearchResult) => {
+    setSelectedResult(result);
+    setShowDisambiguation(false);
+    toast({
+      title: "SMART code selected",
+      description: `Selected: ${result.smart}`,
+    });
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <header className="bg-card border-b border-border sticky top-0 z-10">
+        <div className="px-8 py-4">
+          <h2 className="text-2xl font-bold text-foreground">Article Search</h2>
+          <p className="text-sm text-muted-foreground mt-1">Find SMART codes by article variants</p>
+        </div>
+      </header>
+
+      <div className="p-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Search Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-semibold text-foreground">Search Articles</div>
+                  <CardDescription>Find SMART code by any article variant</CardDescription>
+                </div>
+                <i className="fas fa-magnifying-glass text-muted-foreground text-xl"></i>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSearch} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    Article Code
+                    <span className="text-muted-foreground font-normal ml-1">(any format)</span>
+                  </label>
+                  <div className="relative">
+                    <Input
+                      type="text"
+                      placeholder="e.g., ABC-123, АБЦ123, abc.123"
+                      className="font-mono pr-20"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      data-testid="input-article-search"
+                    />
+                    <Button 
+                      type="submit" 
+                      size="sm"
+                      className="absolute right-2 top-1/2 -translate-y-1/2"
+                      disabled={isSearching || !searchQuery.trim()}
+                      data-testid="button-search-article"
+                    >
+                      {isSearching ? (
+                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                      ) : (
+                        "Search"
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    <i className="fas fa-info-circle mr-1"></i>
+                    Supports mixed case, delimiters, and Cyrillic/Latin variants
+                  </p>
+                </div>
+              </form>
+
+              {/* Search Status */}
+              {isSearching && (
+                <div className="border border-border rounded-lg p-4 bg-muted/50 mt-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-sm text-muted-foreground">Searching database...</span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Results Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Search Results</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!selectedResult && searchResults.length === 0 && !isSearching && (
+                <div className="text-center py-8 text-muted-foreground">
+                  <i className="fas fa-search text-4xl mb-4"></i>
+                  <p>Enter an article code to search</p>
+                </div>
+              )}
+
+              {selectedResult && (
+                <div className="border border-success/30 rounded-lg p-4 bg-success/5">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <Badge className="bg-success text-success-foreground mb-2">
+                        <i className="fas fa-check mr-1"></i>
+                        Match Found
+                      </Badge>
+                      <h4 className="font-mono font-semibold text-lg text-foreground">{selectedResult.smart}</h4>
+                    </div>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Article:</span>
+                      <span className="font-mono font-medium">{selectedResult.article}</span>
+                    </div>
+                    {selectedResult.brand && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Brand:</span>
+                        <span className="font-medium">{selectedResult.brand}</span>
+                      </div>
+                    )}
+                    {selectedResult.description && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Description:</span>
+                        <span className="font-medium">{selectedResult.description}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Current Stock:</span>
+                      <span className="font-mono font-semibold text-success">{selectedResult.currentStock}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-4">
+                    <Button className="flex-1" data-testid="button-add-movement">
+                      <i className="fas fa-plus mr-2"></i>
+                      Add Movement
+                    </Button>
+                    <Button variant="secondary" size="icon" data-testid="button-view-history">
+                      <i className="fas fa-history"></i>
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      <DisambiguationModal
+        isOpen={showDisambiguation}
+        onClose={() => setShowDisambiguation(false)}
+        onSelect={handleSelectMatch}
+        matches={searchResults}
+        searchQuery={searchQuery}
+      />
+    </div>
+  );
+}
