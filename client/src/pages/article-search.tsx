@@ -198,7 +198,7 @@ export default function ArticleSearch() {
                     <Button 
                       className="flex-1" 
                       data-testid="button-add-movement"
-                      onClick={() => setLocation('/add-movement')}
+                      onClick={() => setLocation('/movement')}
                     >
                       <i className="fas fa-plus mr-2"></i>
                       Добавить движение
@@ -207,7 +207,7 @@ export default function ArticleSearch() {
                       variant="secondary" 
                       size="icon" 
                       data-testid="button-view-history"
-                      onClick={() => setLocation('/movements')}
+                      onClick={() => setLocation('/history')}
                     >
                       <i className="fas fa-history"></i>
                     </Button>
