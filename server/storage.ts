@@ -657,30 +657,42 @@ export class DatabaseStorage implements IStorage {
         return;
       }
 
-      // Get DATABASE_URL from environment
-      const dbUrl = process.env.DATABASE_URL;
-      if (!dbUrl) {
-        console.log('DATABASE_URL not found, skipping default connections');
-        return;
-      }
+      // External database credentials (parts_admin)
+      const externalHost = '81.30.105.134';
+      const externalPort = 5432;
+      const externalDatabase = 'parts_admin';
+      const externalUsername = 'parts_admin';
+      const externalPassword = 'Password123';
 
-      // Parse DATABASE_URL (format: postgresql://user:password@host:port/database)
-      const url = new URL(dbUrl);
-      const host = url.hostname;
-      const port = parseInt(url.port) || 5432;
-      const database = url.pathname.slice(1);
-      const username = url.username;
-      const password = url.password;
+      // Create SMART connection to external database
+      await inventoryDb.insert(dbConnections).values({
+        name: 'По умолчанию (SMART)',
+        host: externalHost,
+        port: externalPort,
+        database: externalDatabase,
+        username: externalUsername,
+        password: externalPassword,
+        role: 'smart',
+        tableName: 'public.smart',
+        fieldMapping: {
+          smart: 'smart',
+          articles: 'оригинальность',
+          name: 'наименование',
+          brand: 'бренд',
+          description: 'коннект_бренд',
+        } as any,
+        isActive: true,
+        updatedAt: new Date(),
+      });
 
-      // NO longer creating default SMART connection - user must configure external DB
-      // Create Inventory connection only
+      // Create Inventory connection to external database
       await inventoryDb.insert(dbConnections).values({
         name: 'По умолчанию (Учёт)',
-        host,
-        port,
-        database,
-        username,
-        password,
+        host: externalHost,
+        port: externalPort,
+        database: externalDatabase,
+        username: externalUsername,
+        password: externalPassword,
         role: 'inventory',
         tableName: 'inventory.movements',
         fieldMapping: {
@@ -697,9 +709,86 @@ export class DatabaseStorage implements IStorage {
       });
 
       console.log('Default connections created successfully');
+      
+      // Initialize inventory schema in external database
+      await this.initializeExternalInventoryDb(
+        externalHost,
+        externalPort,
+        externalDatabase,
+        externalUsername,
+        externalPassword
+      );
     } catch (error) {
       console.error('Error creating default connections:', error);
       // Don't throw, just log - this is optional
+    }
+  }
+
+  private async initializeExternalInventoryDb(
+    host: string,
+    port: number,
+    database: string,
+    username: string,
+    password: string
+  ): Promise<void> {
+    try {
+      console.log('Initializing inventory schema in external database...');
+      
+      // Build connection string
+      const connectionString = `postgresql://${username}:${password}@${host}:${port}/${database}`;
+      const externalDb = neon(connectionString);
+      
+      // Create inventory schema
+      await externalDb`CREATE SCHEMA IF NOT EXISTS inventory`;
+      
+      // Create reasons table
+      await externalDb`
+        CREATE TABLE IF NOT EXISTS inventory.reasons (
+          code VARCHAR PRIMARY KEY,
+          title TEXT NOT NULL
+        )
+      `;
+      
+      // Insert fixed reasons
+      await externalDb`
+        INSERT INTO inventory.reasons (code, title) VALUES
+          ('purchase', 'Покупка'),
+          ('sale', 'Продажа'),
+          ('return', 'Возврат'),
+          ('adjust', 'Корректировка'),
+          ('writeoff', 'Списание')
+        ON CONFLICT (code) DO NOTHING
+      `;
+      
+      // Create movements table
+      await externalDb`
+        CREATE TABLE IF NOT EXISTS inventory.movements (
+          id SERIAL PRIMARY KEY,
+          smart VARCHAR NOT NULL,
+          article TEXT NOT NULL,
+          qty_delta INTEGER NOT NULL,
+          reason VARCHAR NOT NULL,
+          note TEXT,
+          created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+          FOREIGN KEY (reason) REFERENCES inventory.reasons(code)
+        )
+      `;
+      
+      // Create stock VIEW
+      await externalDb`
+        CREATE OR REPLACE VIEW inventory.stock AS
+        SELECT 
+          smart,
+          article,
+          SUM(qty_delta) as total_qty
+        FROM inventory.movements
+        GROUP BY smart, article
+      `;
+      
+      console.log('External inventory schema initialized successfully');
+    } catch (error) {
+      console.error('Error initializing external inventory schema:', error);
+      // Don't throw - this is optional initialization
     }
   }
 }
