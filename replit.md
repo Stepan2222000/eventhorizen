@@ -6,6 +6,13 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
+**October 3, 2025 - External Database Integration:**
+- ✅ **Removed Mock Data**: Deleted all test SMART codes and movements - system now uses ONLY real data from connected databases
+- ✅ **External SMART Connection**: All SMART lookups now use active configured external database with field mapping
+- ✅ **Default Connections**: System creates only inventory connection by default - user must configure external SMART database
+- ✅ **Dynamic Field Mapping**: searchSmart/getSmartByCode methods dynamically adapt to configured field names
+- ✅ **Stock Enrichment**: Stock levels fetch metadata from configured SMART connection instead of local JOIN
+
 **October 2, 2025 - Critical Bug Fixes:**
 - ✅ **Auto SMART Lookup**: Added automatic SMART code search when adding movements - users now only enter the article, system finds SMART code automatically
 - ✅ **Disambiguation Modal**: Integrated modal dialog for selecting from multiple SMART matches
