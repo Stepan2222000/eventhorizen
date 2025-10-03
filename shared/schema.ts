@@ -65,9 +65,9 @@ export type StockLevel = {
 // Search result types
 export type ArticleSearchResult = {
   smart: string;
-  article: string;
-  brand?: string;
-  description?: string;
+  articles: string[];
+  brand?: string[];
+  description?: string[];
   name?: string;
   currentStock: number;
 };

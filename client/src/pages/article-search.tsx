@@ -169,20 +169,22 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Артикул:</span>
-                      <span className="font-mono font-medium">{selectedResult.article}</span>
+                    <div className="flex justify-between items-start">
+                      <span className="text-muted-foreground">Артикулы:</span>
+                      <span className="font-mono font-medium text-right max-w-xs break-all">
+                        {selectedResult.articles.join(', ')}
+                      </span>
                     </div>
-                    {selectedResult.brand && (
+                    {selectedResult.brand && selectedResult.brand.length > 0 && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Бренд:</span>
-                        <span className="font-medium">{selectedResult.brand}</span>
+                        <span className="font-medium">{selectedResult.brand.join(', ')}</span>
                       </div>
                     )}
-                    {selectedResult.description && (
+                    {selectedResult.description && selectedResult.description.length > 0 && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Описание:</span>
-                        <span className="font-medium">{selectedResult.description}</span>
+                        <span className="font-medium">{selectedResult.description.join(', ')}</span>
                       </div>
                     )}
                     <div className="flex justify-between">

@@ -34,7 +34,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const totalStock = await storage.getTotalStockBySmart(match.smart);
           return {
             smart: match.smart,
-            article: query,
+            articles: match.articles,
             brand: match.brand,
             description: match.description,
             name: match.name,
