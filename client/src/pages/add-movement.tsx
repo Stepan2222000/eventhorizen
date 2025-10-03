@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ export default function AddMovement() {
   const [showDisambiguation, setShowDisambiguation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [lastSearchedArticle, setLastSearchedArticle] = useState<string>("");
+  const [location] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -41,6 +43,22 @@ export default function AddMovement() {
       note: "",
     },
   });
+
+  // Pre-fill form from URL parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const smart = params.get('smart');
+    const article = params.get('article');
+    
+    if (smart && article) {
+      form.setValue('smart', smart);
+      form.setValue('article', article);
+      toast({
+        title: "Данные загружены",
+        description: `Артикул ${article} и SMART код ${smart} автоматически заполнены`,
+      });
+    }
+  }, [location]);
 
   const { data: reasons } = useQuery({
     queryKey: ["/api/reasons"],

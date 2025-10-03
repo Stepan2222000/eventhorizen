@@ -198,7 +198,13 @@ export default function ArticleSearch() {
                     <Button 
                       className="flex-1" 
                       data-testid="button-add-movement"
-                      onClick={() => setLocation('/movement')}
+                      onClick={() => {
+                        const params = new URLSearchParams({
+                          smart: selectedResult.smart,
+                          article: selectedResult.articles[0] || ''
+                        });
+                        setLocation(`/movement?${params.toString()}`);
+                      }}
                     >
                       <i className="fas fa-plus mr-2"></i>
                       Добавить движение
