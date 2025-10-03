@@ -270,25 +270,57 @@ export class DatabaseStorage implements IStorage {
       // Connect to external DB
       pool = this.createExternalPool(conn);
       
-      // Insert movement into external DB
-      const result = await pool.query(
-        `INSERT INTO inventory.movements (smart, article, qty_delta, reason, note, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [movement.smart, movement.article, movement.qtyDelta, movement.reason, movement.note]
-      );
+      // Start transaction for stock validation
+      await pool.query('BEGIN');
       
-      // Map snake_case to camelCase
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        smart: row.smart,
-        article: row.article,
-        qtyDelta: row.qty_delta,
-        reason: row.reason,
-        note: row.note,
-        createdAt: row.created_at,
-      };
+      try {
+        // Get current stock for this article+smart combination
+        const currentStock = await this.getCurrentStock(pool, movement.smart, movement.article);
+        
+        // Validate stock based on operation type
+        const isDecrease = movement.reason === 'sale' || movement.reason === 'writeoff';
+        const isNegativeAdjust = movement.reason === 'adjust' && movement.qtyDelta < 0;
+        
+        if (isDecrease || isNegativeAdjust) {
+          const requestedQty = Math.abs(movement.qtyDelta);
+          
+          if (currentStock < requestedQty) {
+            throw new InsufficientStockError(
+              movement.article,
+              movement.smart,
+              currentStock,
+              requestedQty
+            );
+          }
+        }
+        
+        // Insert movement into external DB
+        const result = await pool.query(
+          `INSERT INTO inventory.movements (smart, article, qty_delta, reason, note, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())
+           RETURNING *`,
+          [movement.smart, movement.article, movement.qtyDelta, movement.reason, movement.note]
+        );
+        
+        // Commit transaction
+        await pool.query('COMMIT');
+        
+        // Map snake_case to camelCase
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          smart: row.smart,
+          article: row.article,
+          qtyDelta: row.qty_delta,
+          reason: row.reason,
+          note: row.note,
+          createdAt: row.created_at,
+        };
+      } catch (txError) {
+        // Rollback transaction on error
+        await pool.query('ROLLBACK');
+        throw txError;
+      }
     } catch (error) {
       console.error('Error creating movement:', error);
       throw error;
