@@ -18,7 +18,6 @@ import type {
   ConnectionRole
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
-import { neon } from "@neondatabase/serverless";
 import { Pool } from "pg";
 
 export interface IStorage {
@@ -107,6 +106,7 @@ export class DatabaseStorage implements IStorage {
       
       // Build and execute search query with normalization
       // Note: Using template literals for identifiers (validated from DB schema)
+      // Using LIKE for partial matching (user can search "5VX" to find "5VX-25806-00-00")
       const query = `
         SELECT 
           "${smartField}" as smart,
@@ -116,12 +116,12 @@ export class DatabaseStorage implements IStorage {
           "${descField}" as description
         FROM ${tableName}
         WHERE EXISTS (
-          SELECT 1 FROM jsonb_array_elements_text("${articlesField}") as article
+          SELECT 1 FROM unnest("${articlesField}") as article
           WHERE TRANSLATE(
             UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
             'АВЕКМНОРСТУХЁ',
             'ABEKMHOPCTYXE'
-          ) = $1
+          ) LIKE '%' || $1 || '%'
         )
       `;
       
@@ -703,7 +703,7 @@ export class DatabaseStorage implements IStorage {
         tableName: 'public.smart',
         fieldMapping: {
           smart: 'smart',
-          articles: 'оригинальность',
+          articles: 'артикул',
           name: 'наименование',
           brand: 'бренд',
           description: 'коннект_бренд',

@@ -6,10 +6,19 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
-**October 3, 2025 - External Database Integration:**
+**October 3, 2025 - Database Driver Migration & Connection Fix:**
+- ✅ **PostgreSQL Driver Migration**: Replaced all Neon serverless driver (`neon()`) with standard `pg.Pool` for compatibility with regular PostgreSQL servers
+- ✅ **External Database Connection**: Fixed connection to parts_admin@81.30.105.134:5403 (corrected port from 5432 to 5403, username from parts_admin to admin)
+- ✅ **Field Mapping Correction**: Fixed articles field mapping from "оригинальность" to "артикул" (VARCHAR array)
+- ✅ **Query Optimization**: Changed from `jsonb_array_elements_text()` to `unnest()` for VARCHAR array handling
+- ✅ **Partial Search**: Implemented partial matching with LIKE for user-friendly article search (e.g., "5VX" finds "5VX-25806-00-00")
+- ✅ **Auto Schema Creation**: System automatically creates inventory schema in external database on startup
+- ✅ **Full Test Coverage**: Comprehensive e2e tests verify search, disambiguation, movement creation, and stock tracking
+
+**Earlier - External Database Integration:**
 - ✅ **Removed Mock Data**: Deleted all test SMART codes and movements - system now uses ONLY real data from connected databases
 - ✅ **External SMART Connection**: All SMART lookups now use active configured external database with field mapping
-- ✅ **Default Connections**: System creates only inventory connection by default - user must configure external SMART database
+- ✅ **Default Connections**: System creates default connections automatically to parts_admin database
 - ✅ **Dynamic Field Mapping**: searchSmart/getSmartByCode methods dynamically adapt to configured field names
 - ✅ **Stock Enrichment**: Stock levels fetch metadata from configured SMART connection instead of local JOIN
 
@@ -71,7 +80,7 @@ This localization ensures the system is accessible for Russian-speaking users in
 - Express.js server with TypeScript
 - Node.js runtime using ESM modules
 - Drizzle ORM for database interactions
-- PostgreSQL database (Neon serverless driver)
+- PostgreSQL database (standard `pg` driver with connection pooling)
 - Multer for file upload handling
 - XLSX library for spreadsheet parsing
 
@@ -101,8 +110,15 @@ This localization ensures the system is accessible for Russian-speaking users in
 
 **Database Schema (PostgreSQL):**
 
-*Public Schema (SMART Reference - Read Only):*
-- `smart` table: Primary key `smart` (VARCHAR), JSONB array of `articles`, optional `name`, `brand`, `description` fields
+*External SMART Database (parts_admin@81.30.105.134:5403 - Read Only):*
+- `public.smart` table: 
+  - `smart` (VARCHAR(15), PRIMARY KEY) - SMART reference code
+  - `артикул` (VARCHAR(20)[]) - Array of article codes
+  - `наименование` (VARCHAR(100)) - Product name
+  - `бренд` (VARCHAR(15)[]) - Array of brands
+  - `коннект_бренд` (VARCHAR(15)[]) - Array of connector brands
+  - Additional fields: оригинальность, тип_транспорта, область_применения, вес, объем, коннект_артикул
+- Field mapping configured via db_connections table (articles → артикул, name → наименование, etc.)
 - Used as reference data only; not modified by application
 
 *Inventory Schema (Read-Write):*
@@ -115,7 +131,8 @@ This localization ensures the system is accessible for Russian-speaking users in
 - Normalization applied only for search/matching, never stored
 - Three-step process: uppercase conversion → delimiter removal → Cyrillic-to-Latin character mapping
 - Original user input preserved in database for traceability
-- SQL query uses jsonb_array_elements_text with regex-based normalization for matching
+- SQL query uses `unnest()` with regex-based normalization for matching VARCHAR arrays
+- Partial matching enabled: search "5VX" finds articles like "5VX-25806-00-00"
 
 **Data Flow:**
 1. User enters article → normalized for search
@@ -133,10 +150,11 @@ This localization ensures the system is accessible for Russian-speaking users in
 ### External Dependencies
 
 **Database:**
-- PostgreSQL database via Neon serverless driver (`@neondatabase/serverless`)
-- Connection via `DATABASE_URL` environment variable
-- Drizzle ORM for type-safe queries
-- Production setup would use separate database instances for `parts_admin` (port 5403) and `ebay_admin` (port 5405)
+- PostgreSQL database via standard `pg` driver with connection pooling
+- Local inventory database via `DATABASE_URL` environment variable
+- External SMART database at parts_admin@81.30.105.134:5403
+- Drizzle ORM for type-safe queries on local database
+- Raw `pg.Pool` for dynamic connections to external databases
 
 **Third-Party Libraries:**
 - Radix UI: Comprehensive set of accessible component primitives

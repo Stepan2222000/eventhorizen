@@ -15,12 +15,24 @@ export default function StockLevels() {
     queryKey: ["/api/stock"],
   });
 
-  const filteredStock = (stockLevels as StockLevel[] || []).filter(item =>
-    item.smart.toLowerCase().includes(filter.toLowerCase()) ||
-    item.article.toLowerCase().includes(filter.toLowerCase()) ||
-    (item.brand && item.brand.toLowerCase().includes(filter.toLowerCase())) ||
-    (item.description && item.description.toLowerCase().includes(filter.toLowerCase()))
-  );
+  const filteredStock = (stockLevels as StockLevel[] || []).filter(item => {
+    const filterLower = filter.toLowerCase();
+    const matchesBrand = item.brand ? 
+      (Array.isArray(item.brand) ? 
+        item.brand.some(b => b.toLowerCase().includes(filterLower)) : 
+        item.brand.toLowerCase().includes(filterLower)) : 
+      false;
+    const matchesDescription = item.description ? 
+      (Array.isArray(item.description) ? 
+        item.description.some(d => d.toLowerCase().includes(filterLower)) : 
+        item.description.toLowerCase().includes(filterLower)) : 
+      false;
+    
+    return item.smart.toLowerCase().includes(filterLower) ||
+      item.article.toLowerCase().includes(filterLower) ||
+      matchesBrand ||
+      matchesDescription;
+  });
 
   const getStockStatus = (qty: number) => {
     if (qty === 0) return { label: "Нет в наличии", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
