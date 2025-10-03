@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, InsufficientStockError } from "./storage";
 import { initializeInventoryDb } from "./db";
 import { insertMovementSchema } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
@@ -75,6 +75,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(movement);
     } catch (error) {
       console.error("Create movement error:", error);
+      
+      // Handle insufficient stock error
+      if (error instanceof InsufficientStockError) {
+        return res.status(409).json({ 
+          error: error.message,
+          details: {
+            article: error.article,
+            smart: error.smart,
+            currentStock: error.currentStock,
+            requestedQty: error.requestedQty
+          }
+        });
+      }
+      
+      // Handle other errors
       if (error instanceof Error) {
         res.status(400).json({ error: error.message });
       } else {
