@@ -257,29 +257,34 @@ export class DatabaseStorage implements IStorage {
 
   async getStockLevels(limit = 50, offset = 0): Promise<StockLevel[]> {
     try {
+      // Get stock aggregates from inventory
       const result = await inventoryDb.execute(sql`
         SELECT 
           s.smart,
           string_agg(DISTINCT s.article, ', ') as article,
-          SUM(s.total_qty) as total_qty,
-          sm.brand,
-          sm.description,
-          sm.name
+          SUM(s.total_qty) as total_qty
         FROM inventory.stock s
-        LEFT JOIN public.smart sm ON s.smart = sm.smart
-        GROUP BY s.smart, sm.brand, sm.description, sm.name
+        GROUP BY s.smart
         ORDER BY s.smart
         LIMIT ${limit} OFFSET ${offset}
       `);
       
-      return result.rows.map(row => ({
-        smart: row.smart as string,
-        article: row.article as string,
-        totalQty: row.total_qty as number,
-        brand: row.brand as string | undefined,
-        description: row.description as string | undefined,
-        name: row.name as string | undefined,
-      }));
+      // Enrich with SMART reference data from active connection
+      const enriched = await Promise.all(
+        result.rows.map(async (row) => {
+          const smartData = await this.getSmartByCode(row.smart as string);
+          return {
+            smart: row.smart as string,
+            article: row.article as string,
+            totalQty: row.total_qty as number,
+            brand: smartData?.brand || undefined,
+            description: smartData?.description || undefined,
+            name: smartData?.name || undefined,
+          };
+        })
+      );
+      
+      return enriched;
     } catch (error) {
       console.error('Error getting stock levels:', error);
       throw new Error('Failed to get stock levels');
@@ -292,12 +297,8 @@ export class DatabaseStorage implements IStorage {
         SELECT 
           s.smart,
           s.article,
-          s.total_qty,
-          sm.brand,
-          sm.description,
-          sm.name
+          s.total_qty
         FROM inventory.stock s
-        LEFT JOIN public.smart sm ON s.smart = sm.smart
         WHERE s.smart = ${smartCode} AND s.article = ${article}
         LIMIT 1
       `);
@@ -305,13 +306,17 @@ export class DatabaseStorage implements IStorage {
       if (result.rows.length === 0) return undefined;
       
       const row = result.rows[0];
+      
+      // Enrich with SMART reference data from active connection
+      const smartData = await this.getSmartByCode(smartCode);
+      
       return {
         smart: row.smart as string,
         article: row.article as string,
         totalQty: row.total_qty as number,
-        brand: row.brand as string | undefined,
-        description: row.description as string | undefined,
-        name: row.name as string | undefined,
+        brand: smartData?.brand || undefined,
+        description: smartData?.description || undefined,
+        name: smartData?.name || undefined,
       };
     } catch (error) {
       console.error('Error getting stock by SMART and article:', error);
