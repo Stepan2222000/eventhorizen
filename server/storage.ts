@@ -257,15 +257,14 @@ export class DatabaseStorage implements IStorage {
 
   async getStockLevels(limit = 50, offset = 0): Promise<StockLevel[]> {
     try {
-      // Get stock aggregates from inventory
+      // Get stock aggregates from inventory (per article, not per SMART)
       const result = await inventoryDb.execute(sql`
         SELECT 
           s.smart,
-          string_agg(DISTINCT s.article, ', ') as article,
-          SUM(s.total_qty) as total_qty
+          s.article,
+          s.total_qty
         FROM inventory.stock s
-        GROUP BY s.smart
-        ORDER BY s.smart
+        ORDER BY s.smart, s.article
         LIMIT ${limit} OFFSET ${offset}
       `);
       
