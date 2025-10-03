@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ export default function ArticleSearch() {
   
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
 
   const searchMutation = useMutation({
     mutationFn: async (query: string) => {
@@ -169,9 +171,9 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    <div className="flex justify-between items-start">
+                    <div className="flex flex-col gap-1">
                       <span className="text-muted-foreground">Артикулы:</span>
-                      <span className="font-mono font-medium text-right max-w-xs break-all">
+                      <span className="font-mono font-medium break-words">
                         {selectedResult.articles.join(', ')}
                       </span>
                     </div>
@@ -193,11 +195,20 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="flex gap-2 mt-4">
-                    <Button className="flex-1" data-testid="button-add-movement">
+                    <Button 
+                      className="flex-1" 
+                      data-testid="button-add-movement"
+                      onClick={() => setLocation('/add-movement')}
+                    >
                       <i className="fas fa-plus mr-2"></i>
                       Добавить движение
                     </Button>
-                    <Button variant="secondary" size="icon" data-testid="button-view-history">
+                    <Button 
+                      variant="secondary" 
+                      size="icon" 
+                      data-testid="button-view-history"
+                      onClick={() => setLocation('/movements')}
+                    >
                       <i className="fas fa-history"></i>
                     </Button>
                   </div>
