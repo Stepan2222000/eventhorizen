@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -16,6 +18,7 @@ import { insertMovementSchema } from "@shared/schema";
 import type { InsertMovement, Reason, ArticleSearchResult } from "@shared/schema";
 import { z } from "zod";
 import { DisambiguationModal } from "@/components/disambiguation-modal";
+import { Check } from "lucide-react";
 
 const formSchema = insertMovementSchema.extend({
   qtyDelta: z.number().int().min(-999999).max(999999),
@@ -30,6 +33,9 @@ export default function AddMovement() {
   const [isSearching, setIsSearching] = useState(false);
   const [lastSearchedArticle, setLastSearchedArticle] = useState<string>("");
   const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [autocompleteResults, setAutocompleteResults] = useState<ArticleSearchResult[]>([]);
+  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
   const [location] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -71,6 +77,46 @@ export default function AddMovement() {
       });
     }
   }, [location]);
+
+  // Cleanup debounce timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimeout.current) {
+        clearTimeout(debounceTimeout.current);
+      }
+    };
+  }, []);
+
+  // Autocomplete search with debouncing
+  const performAutocompleteSearch = async (query: string) => {
+    if (!query.trim() || query.trim().length < 2) {
+      setAutocompleteResults([]);
+      setAutocompleteOpen(false);
+      return;
+    }
+
+    try {
+      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query.trim())}`);
+      const results: ArticleSearchResult[] = await response.json();
+      setAutocompleteResults(results);
+      setAutocompleteOpen(results.length > 0);
+    } catch (error) {
+      console.error("Autocomplete search error:", error);
+      setAutocompleteResults([]);
+      setAutocompleteOpen(false);
+    }
+  };
+
+  // Trigger autocomplete search on article input change with debouncing
+  const handleArticleInputChange = (value: string) => {
+    if (debounceTimeout.current) {
+      clearTimeout(debounceTimeout.current);
+    }
+
+    debounceTimeout.current = setTimeout(() => {
+      performAutocompleteSearch(value);
+    }, 300);
+  };
 
   const { data: reasons } = useQuery({
     queryKey: ["/api/reasons"],
@@ -194,6 +240,19 @@ export default function AddMovement() {
     });
   };
 
+  const handleAutocompleteSelect = (result: ArticleSearchResult) => {
+    // Use the user's search query as the article value
+    const currentArticle = form.getValues('article');
+    form.setValue('article', currentArticle);
+    form.setValue('smart', result.smart);
+    setAutocompleteOpen(false);
+    setAutocompleteResults([]);
+    toast({
+      title: "Артикул выбран",
+      description: `SMART код: ${result.smart}`,
+    });
+  };
+
   return (
     <div className="flex-1 overflow-y-auto">
       <header className="bg-card border-b border-border sticky top-0 z-10">
@@ -228,26 +287,73 @@ export default function AddMovement() {
                         </FormLabel>
                         <FormControl>
                           <div className="flex gap-2">
-                            <Input 
-                              placeholder="Введите артикул для поиска" 
-                              className="font-mono flex-1" 
-                              {...field}
-                              onChange={(e) => {
-                                field.onChange(e);
-                                // Clear all search state when article changes
-                                form.setValue('smart', '');
-                                setSearchResults([]);
-                                setShowDisambiguation(false);
-                                setIsSearching(false);
-                              }}
-                              data-testid="input-article"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleArticleSearch();
-                                }
-                              }}
-                            />
+                            <Popover open={autocompleteOpen} onOpenChange={setAutocompleteOpen}>
+                              <PopoverTrigger asChild>
+                                <div className="flex-1">
+                                  <Input 
+                                    placeholder="Начните вводить артикул..." 
+                                    className="font-mono" 
+                                    {...field}
+                                    onChange={(e) => {
+                                      field.onChange(e);
+                                      handleArticleInputChange(e.target.value);
+                                      // Clear all search state when article changes
+                                      form.setValue('smart', '');
+                                      setSearchResults([]);
+                                      setShowDisambiguation(false);
+                                      setIsSearching(false);
+                                    }}
+                                    data-testid="input-article"
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleArticleSearch();
+                                      } else if (e.key === 'Escape') {
+                                        setAutocompleteOpen(false);
+                                      }
+                                    }}
+                                  />
+                                </div>
+                              </PopoverTrigger>
+                              <PopoverContent 
+                                className="w-[var(--radix-popover-trigger-width)] p-0" 
+                                align="start"
+                                onOpenAutoFocus={(e) => e.preventDefault()}
+                              >
+                                <Command>
+                                  <CommandList>
+                                    <CommandEmpty>Ничего не найдено</CommandEmpty>
+                                    <CommandGroup heading="Найденные артикулы">
+                                      {autocompleteResults.map((result, idx) => (
+                                        <CommandItem
+                                          key={`${result.smart}-${idx}`}
+                                          value={result.smart}
+                                          onSelect={() => handleAutocompleteSelect(result)}
+                                          className="cursor-pointer"
+                                          data-testid={`autocomplete-item-${idx}`}
+                                        >
+                                          <div className="flex flex-col gap-1 w-full">
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-mono text-sm font-medium">
+                                                {result.articles.join(', ')}
+                                              </span>
+                                              <span className="text-xs text-muted-foreground font-mono">
+                                                {result.smart}
+                                              </span>
+                                            </div>
+                                            {result.name && (
+                                              <span className="text-xs text-muted-foreground">
+                                                {result.name}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </CommandItem>
+                                      ))}
+                                    </CommandGroup>
+                                  </CommandList>
+                                </Command>
+                              </PopoverContent>
+                            </Popover>
                             <Button
                               type="button"
                               onClick={handleArticleSearch}
@@ -268,7 +374,7 @@ export default function AddMovement() {
                         <FormMessage />
                         <p className="text-xs text-muted-foreground mt-1">
                           <i className="fas fa-info-circle mr-1"></i>
-                          Введите артикул и нажмите "Найти SMART" или Enter
+                          Начните вводить артикул - появятся подсказки
                         </p>
                       </FormItem>
                     )}
