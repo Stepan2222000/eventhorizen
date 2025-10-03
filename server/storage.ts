@@ -19,6 +19,7 @@ import type {
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import { neon } from "@neondatabase/serverless";
+import { Pool } from "pg";
 
 export interface IStorage {
   // SMART reference operations
@@ -731,26 +732,32 @@ export class DatabaseStorage implements IStorage {
     username: string,
     password: string
   ): Promise<void> {
+    let pool: Pool | null = null;
     try {
       console.log('Initializing inventory schema in external database...');
       
-      // Build connection string
-      const connectionString = `postgresql://${username}:${password}@${host}:${port}/${database}`;
-      const externalDb = neon(connectionString);
+      // Create pool for external database
+      pool = new Pool({
+        host,
+        port,
+        database,
+        user: username,
+        password,
+      });
       
       // Create inventory schema
-      await externalDb`CREATE SCHEMA IF NOT EXISTS inventory`;
+      await pool.query(`CREATE SCHEMA IF NOT EXISTS inventory`);
       
       // Create reasons table
-      await externalDb`
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS inventory.reasons (
           code VARCHAR PRIMARY KEY,
           title TEXT NOT NULL
         )
-      `;
+      `);
       
       // Insert fixed reasons
-      await externalDb`
+      await pool.query(`
         INSERT INTO inventory.reasons (code, title) VALUES
           ('purchase', 'Покупка'),
           ('sale', 'Продажа'),
@@ -758,10 +765,10 @@ export class DatabaseStorage implements IStorage {
           ('adjust', 'Корректировка'),
           ('writeoff', 'Списание')
         ON CONFLICT (code) DO NOTHING
-      `;
+      `);
       
       // Create movements table
-      await externalDb`
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS inventory.movements (
           id SERIAL PRIMARY KEY,
           smart VARCHAR NOT NULL,
@@ -772,10 +779,10 @@ export class DatabaseStorage implements IStorage {
           created_at TIMESTAMP DEFAULT NOW() NOT NULL,
           FOREIGN KEY (reason) REFERENCES inventory.reasons(code)
         )
-      `;
+      `);
       
       // Create stock VIEW
-      await externalDb`
+      await pool.query(`
         CREATE OR REPLACE VIEW inventory.stock AS
         SELECT 
           smart,
@@ -783,12 +790,17 @@ export class DatabaseStorage implements IStorage {
           SUM(qty_delta) as total_qty
         FROM inventory.movements
         GROUP BY smart, article
-      `;
+      `);
       
       console.log('External inventory schema initialized successfully');
     } catch (error) {
       console.error('Error initializing external inventory schema:', error);
       // Don't throw - this is optional initialization
+    } finally {
+      // Close pool connection
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 }
