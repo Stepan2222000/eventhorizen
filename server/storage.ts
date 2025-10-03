@@ -686,9 +686,9 @@ export class DatabaseStorage implements IStorage {
 
       // External database credentials (parts_admin)
       const externalHost = '81.30.105.134';
-      const externalPort = 5432;
+      const externalPort = 5403;
       const externalDatabase = 'parts_admin';
-      const externalUsername = 'parts_admin';
+      const externalUsername = 'admin';
       const externalPassword = 'Password123';
 
       // Create SMART connection to external database
