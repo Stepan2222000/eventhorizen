@@ -6,6 +6,13 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
+**October 3, 2025 - UI Improvements & Navigation Fix:**
+- ✅ **Article Display**: Fixed article text wrapping in search results (flex-col layout with break-words)
+- ✅ **Navigation Buttons**: Added working onClick handlers for "Добавить движение" and history buttons
+- ✅ **Route Correction**: Fixed navigation routes to match App.tsx (/movement and /history instead of /add-movement and /movements)
+- ✅ **Modal Enhancements**: Added scrollable area (max-h-50vh) and compact card sizing to disambiguation modal
+- ✅ **Full Test Coverage**: Verified search, navigation, movement creation, and history display work correctly
+
 **October 3, 2025 - Database Driver Migration & Connection Fix:**
 - ✅ **PostgreSQL Driver Migration**: Replaced all Neon serverless driver (`neon()`) with standard `pg.Pool` for compatibility with regular PostgreSQL servers
 - ✅ **External Database Connection**: Fixed connection to parts_admin@81.30.105.134:5403 (corrected port from 5432 to 5403, username from parts_admin to admin)
