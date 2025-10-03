@@ -29,6 +29,7 @@ export default function AddMovement() {
   const [showDisambiguation, setShowDisambiguation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [lastSearchedArticle, setLastSearchedArticle] = useState<string>("");
+  const [hasPrefilled, setHasPrefilled] = useState(false);
   const [location] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -46,16 +47,27 @@ export default function AddMovement() {
 
   // Pre-fill form from URL parameters
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    // Extract query string from location
+    const queryString = location.split('?')[1];
+    if (!queryString) return;
+    
+    const params = new URLSearchParams(queryString);
     const smart = params.get('smart');
     const article = params.get('article');
     
-    if (smart && article) {
-      form.setValue('smart', smart);
-      form.setValue('article', article);
+    // Only prefill if both params exist and haven't already prefilled
+    if (smart && article && !hasPrefilled) {
+      form.reset({
+        smart,
+        article,
+        qtyDelta: 0,
+        reason: "",
+        note: "",
+      });
+      setHasPrefilled(true);
       toast({
         title: "Данные загружены",
-        description: `Артикул ${article} и SMART код ${smart} автоматически заполнены`,
+        description: "Артикул и SMART код автоматически заполнены из результатов поиска",
       });
     }
   }, [location]);
@@ -129,6 +141,7 @@ export default function AddMovement() {
       setShowDisambiguation(false);
       setIsSearching(false);
       setLastSearchedArticle("");
+      setHasPrefilled(false);
     },
     onError: (error) => {
       toast({
@@ -272,9 +285,10 @@ export default function AddMovement() {
                         <FormControl>
                           <Input 
                             placeholder="Будет найден автоматически" 
-                            className="font-mono bg-muted" 
+                            className="font-mono bg-muted cursor-not-allowed" 
                             {...field}
-                            readOnly
+                            onKeyDown={(e) => e.preventDefault()}
+                            onPaste={(e) => e.preventDefault()}
                             data-testid="input-smart-code"
                           />
                         </FormControl>
@@ -407,6 +421,7 @@ export default function AddMovement() {
                         setShowDisambiguation(false);
                         setIsSearching(false);
                         setLastSearchedArticle("");
+                        setHasPrefilled(false);
                       }}
                       data-testid="button-clear-form"
                     >
