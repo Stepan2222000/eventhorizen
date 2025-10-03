@@ -217,6 +217,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMovement(movement: InsertMovement): Promise<Movement> {
+    let pool: Pool | null = null;
     try {
       // Verify SMART code exists
       const smartRecord = await this.getSmartByCode(movement.smart);
@@ -224,73 +225,205 @@ export class DatabaseStorage implements IStorage {
         throw new Error(`SMART code ${movement.smart} not found in reference database`);
       }
 
-      const result = await inventoryDb
-        .insert(movements)
-        .values(movement)
-        .returning();
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
       
-      return result[0];
+      if (!activeConn) {
+        throw new Error('No active inventory connection configured');
+      }
+      
+      // Get full connection details (including password)
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        throw new Error('Inventory connection not found');
+      }
+      
+      const conn = fullConnections[0];
+      
+      // Connect to external DB
+      pool = this.createExternalPool(conn);
+      
+      // Insert movement into external DB
+      const result = await pool.query(
+        `INSERT INTO inventory.movements (smart, article, qty_delta, reason, note, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING *`,
+        [movement.smart, movement.article, movement.qtyDelta, movement.reason, movement.note]
+      );
+      
+      // Map snake_case to camelCase
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        createdAt: row.created_at,
+      };
     } catch (error) {
       console.error('Error creating movement:', error);
       throw error;
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getMovements(limit = 50, offset = 0): Promise<Movement[]> {
+    let pool: Pool | null = null;
     try {
-      const result = await inventoryDb
-        .select()
-        .from(movements)
-        .orderBy(sql`created_at DESC`)
-        .limit(limit)
-        .offset(offset);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
       
-      return result;
+      if (!activeConn) {
+        console.log('No active inventory connection found');
+        return [];
+      }
+      
+      // Get full connection details (including password)
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      
+      // Connect to external DB
+      pool = this.createExternalPool(conn);
+      
+      // Query movements from external DB
+      const result = await pool.query(
+        `SELECT * FROM inventory.movements 
+         ORDER BY created_at DESC 
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+      
+      // Map snake_case to camelCase
+      return result.rows.map(row => ({
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        createdAt: row.created_at,
+      }));
     } catch (error) {
       console.error('Error getting movements:', error);
       throw new Error('Failed to get movements');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getMovementsBySmartAndArticle(smartCode: string, article: string): Promise<Movement[]> {
+    let pool: Pool | null = null;
     try {
-      const result = await inventoryDb
-        .select()
-        .from(movements)
-        .where(and(
-          eq(movements.smart, smartCode),
-          eq(movements.article, article)
-        ))
-        .orderBy(sql`created_at DESC`);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
       
-      return result;
+      if (!activeConn) {
+        return [];
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT * FROM inventory.movements 
+         WHERE smart = $1 AND article = $2
+         ORDER BY created_at DESC`,
+        [smartCode, article]
+      );
+      
+      // Map snake_case to camelCase
+      return result.rows.map(row => ({
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        createdAt: row.created_at,
+      }));
     } catch (error) {
       console.error('Error getting movements by SMART and article:', error);
       throw new Error('Failed to get movements');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getStockLevels(limit = 50, offset = 0): Promise<StockLevel[]> {
+    let pool: Pool | null = null;
     try {
-      // Get stock aggregates from inventory (per article, not per SMART)
-      const result = await inventoryDb.execute(sql`
-        SELECT 
-          s.smart,
-          s.article,
-          s.total_qty
-        FROM inventory.stock s
-        ORDER BY s.smart, s.article
-        LIMIT ${limit} OFFSET ${offset}
-      `);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      // Get stock aggregates from inventory view
+      const result = await pool.query(
+        `SELECT smart, article, total_qty
+         FROM inventory.stock
+         ORDER BY smart, article
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
       
       // Enrich with SMART reference data from active connection
       const enriched = await Promise.all(
         result.rows.map(async (row) => {
-          const smartData = await this.getSmartByCode(row.smart as string);
+          const smartData = await this.getSmartByCode(row.smart);
           return {
-            smart: row.smart as string,
-            article: row.article as string,
-            totalQty: row.total_qty as number,
+            smart: row.smart,
+            article: row.article,
+            totalQty: row.total_qty,
             brand: smartData?.brand || undefined,
             description: smartData?.description || undefined,
             name: smartData?.name || undefined,
@@ -302,20 +435,44 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting stock levels:', error);
       throw new Error('Failed to get stock levels');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getStockBySmartAndArticle(smartCode: string, article: string): Promise<StockLevel | undefined> {
+    let pool: Pool | null = null;
     try {
-      const result = await inventoryDb.execute(sql`
-        SELECT 
-          s.smart,
-          s.article,
-          s.total_qty
-        FROM inventory.stock s
-        WHERE s.smart = ${smartCode} AND s.article = ${article}
-        LIMIT 1
-      `);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return undefined;
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return undefined;
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT smart, article, total_qty
+         FROM inventory.stock
+         WHERE smart = $1 AND article = $2
+         LIMIT 1`,
+        [smartCode, article]
+      );
       
       if (result.rows.length === 0) return undefined;
       
@@ -325,9 +482,9 @@ export class DatabaseStorage implements IStorage {
       const smartData = await this.getSmartByCode(smartCode);
       
       return {
-        smart: row.smart as string,
-        article: row.article as string,
-        totalQty: row.total_qty as number,
+        smart: row.smart,
+        article: row.article,
+        totalQty: row.total_qty,
         brand: smartData?.brand || undefined,
         description: smartData?.description || undefined,
         name: smartData?.name || undefined,
@@ -335,35 +492,91 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting stock by SMART and article:', error);
       throw new Error('Failed to get stock');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getTotalStockBySmart(smartCode: string): Promise<number> {
+    let pool: Pool | null = null;
     try {
-      const result = await inventoryDb.execute(sql`
-        SELECT SUM(total_qty) as total
-        FROM inventory.stock
-        WHERE smart = ${smartCode}
-      `);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
       
-      return (result.rows[0]?.total as number) || 0;
+      if (!activeConn) {
+        return 0;
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return 0;
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT SUM(total_qty) as total
+         FROM inventory.stock
+         WHERE smart = $1`,
+        [smartCode]
+      );
+      
+      return result.rows[0]?.total || 0;
     } catch (error) {
       console.error('Error getting total stock by SMART:', error);
       throw new Error('Failed to get total stock');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getReasons(): Promise<Reason[]> {
+    let pool: Pool | null = null;
     try {
-      const result = await inventoryDb
-        .select()
-        .from(reasons)
-        .orderBy(reasons.code);
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
       
-      return result;
+      if (!activeConn) {
+        return [];
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT code, title FROM inventory.reasons ORDER BY code`
+      );
+      
+      return result.rows;
     } catch (error) {
       console.error('Error getting reasons:', error);
       throw new Error('Failed to get reasons');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
