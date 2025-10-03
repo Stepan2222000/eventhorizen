@@ -20,6 +20,18 @@ import type {
 import { normalizeArticle } from "@shared/normalization";
 import { Pool } from "pg";
 
+export class InsufficientStockError extends Error {
+  constructor(
+    public article: string,
+    public smart: string,
+    public currentStock: number,
+    public requestedQty: number
+  ) {
+    super(`Недостаточно товара на складе. Артикул: ${article}, SMART: ${smart}. Текущий остаток: ${currentStock}, запрошено: ${requestedQty}`);
+    this.name = 'InsufficientStockError';
+  }
+}
+
 export interface IStorage {
   // SMART reference operations
   searchSmart(normalizedArticle: string): Promise<Smart[]>;
