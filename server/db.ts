@@ -14,27 +14,8 @@ export const inventoryDb = drizzle(pool, { schema });
 // Initialize inventory database schema
 export async function initializeInventoryDb() {
   try {
-    // Create SMART reference table (public schema)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS public.smart (
-        smart VARCHAR PRIMARY KEY,
-        articles JSONB NOT NULL,
-        name TEXT,
-        brand TEXT,
-        description TEXT
-      )
-    `);
-    
-    // Insert mock SMART data for testing
-    await pool.query(`
-      INSERT INTO public.smart (smart, articles, name, brand, description) VALUES
-        ('SMART-00001', '["ABC-123", "АБЦ-123", "abc.123"]', 'Brake Pad Set', 'AutoParts', 'Front brake pads for sedan'),
-        ('SMART-00002', '["DEF-456", "ДЕФ-456", "def/456"]', 'Oil Filter', 'FilterCo', 'Engine oil filter'),
-        ('SMART-00003', '["GHI-789", "ГХИ-789"]', 'Air Filter', 'FilterCo', 'Cabin air filter'),
-        ('SMART-00004', '["JKL-012", "ЙКЛ-012", "jkl 012"]', 'Spark Plug', 'IgnitionPro', 'Iridium spark plug'),
-        ('SMART-00005', '["MNO-345"]', 'Wiper Blade', 'ClearView', 'Front wiper blade 24 inch')
-      ON CONFLICT (smart) DO NOTHING
-    `);
+    // SMART reference table will be accessed from configured database connection
+    // No longer creating or inserting mock data - all data must come from connected DB
     
     // Create inventory schema
     await pool.query(`CREATE SCHEMA IF NOT EXISTS inventory`);
