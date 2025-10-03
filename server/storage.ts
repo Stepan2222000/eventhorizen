@@ -55,7 +55,20 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  // Helper method to create external DB pool
+  private createExternalPool(conn: any): Pool {
+    return new Pool({
+      host: conn.host,
+      port: conn.port,
+      database: conn.database,
+      user: conn.username,
+      password: conn.password,
+      ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+    });
+  }
+
   async searchSmart(normalizedArticle: string): Promise<Smart[]> {
+    let pool: Pool | null = null;
     try {
       // Get active SMART connection
       const activeConn = await this.getActiveConnection('smart');
@@ -79,12 +92,8 @@ export class DatabaseStorage implements IStorage {
       const conn = fullConnections[0];
       const fieldMapping = (conn.fieldMapping as any) || {};
       
-      // Build connection string
-      const sslParam = conn.ssl ? `?sslmode=${conn.ssl}` : '';
-      const connectionString = `postgresql://${conn.username}:${conn.password}@${conn.host}:${conn.port}/${conn.database}${sslParam}`;
-      
       // Connect to external DB
-      const externalDb = neon(connectionString);
+      pool = this.createExternalPool(conn);
       
       // Get field names from mapping or use defaults
       const smartField = fieldMapping.smart || 'smart';
@@ -116,9 +125,9 @@ export class DatabaseStorage implements IStorage {
         )
       `;
       
-      const result = await externalDb(query, [normalizedArticle]);
+      const result = await pool.query(query, [normalizedArticle]);
       
-      return result.map((row: any) => ({
+      return result.rows.map((row: any) => ({
         smart: row.smart,
         articles: row.articles,
         name: row.name,
@@ -128,10 +137,15 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error searching SMART:', error);
       throw new Error('Failed to search SMART database');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getSmartByCode(smartCode: string): Promise<Smart | undefined> {
+    let pool: Pool | null = null;
     try {
       // Get active SMART connection
       const activeConn = await this.getActiveConnection('smart');
@@ -155,12 +169,8 @@ export class DatabaseStorage implements IStorage {
       const conn = fullConnections[0];
       const fieldMapping = (conn.fieldMapping as any) || {};
       
-      // Build connection string
-      const sslParam = conn.ssl ? `?sslmode=${conn.ssl}` : '';
-      const connectionString = `postgresql://${conn.username}:${conn.password}@${conn.host}:${conn.port}/${conn.database}${sslParam}`;
-      
       // Connect to external DB
-      const externalDb = neon(connectionString);
+      pool = this.createExternalPool(conn);
       
       // Get field names from mapping or use defaults
       const smartField = fieldMapping.smart || 'smart';
@@ -185,20 +195,24 @@ export class DatabaseStorage implements IStorage {
         LIMIT 1
       `;
       
-      const result = await externalDb(query, [smartCode]);
+      const result = await pool.query(query, [smartCode]);
       
-      if (result.length === 0) return undefined;
+      if (result.rows.length === 0) return undefined;
       
       return {
-        smart: result[0].smart,
-        articles: result[0].articles,
-        name: result[0].name,
-        brand: result[0].brand,
-        description: result[0].description,
+        smart: result.rows[0].smart,
+        articles: result.rows[0].articles,
+        name: result.rows[0].name,
+        brand: result.rows[0].brand,
+        description: result.rows[0].description,
       };
     } catch (error) {
       console.error('Error getting SMART by code:', error);
       throw new Error('Failed to get SMART code');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
@@ -468,19 +482,25 @@ export class DatabaseStorage implements IStorage {
   }
 
   async testDbConnection(connection: InsertDbConnection): Promise<DbConnectionTest> {
+    let pool: Pool | null = null;
     try {
-      // Build connection string
-      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
-      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
+      // Create pool
+      pool = new Pool({
+        host: connection.host,
+        port: connection.port,
+        database: connection.database,
+        user: connection.username,
+        password: connection.password,
+        ssl: connection.ssl ? { rejectUnauthorized: false } : undefined,
+      });
       
       // Try to connect
-      const testDb = neon(connectionString);
-      const result = await testDb`SELECT version()`;
+      const result = await pool.query('SELECT version()');
       
       return {
         success: true,
         message: 'Соединение успешно',
-        version: result[0]?.version || 'Unknown',
+        version: result.rows[0]?.version || 'Unknown',
       };
     } catch (error) {
       console.error('DB connection test error:', error);
@@ -488,10 +508,15 @@ export class DatabaseStorage implements IStorage {
         success: false,
         message: error instanceof Error ? error.message : 'Не удалось подключиться',
       };
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
   async getDbTables(connectionId: number): Promise<DbTablesResult> {
+    let pool: Pool | null = null;
     try {
       // Get connection details
       const connections = await inventoryDb
@@ -506,13 +531,9 @@ export class DatabaseStorage implements IStorage {
       
       const connection = connections[0];
       
-      // Build connection string
-      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
-      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
-      
       // Connect and get tables
-      const testDb = neon(connectionString);
-      const result = await testDb`
+      pool = this.createExternalPool(connection);
+      const result = await pool.query(`
         SELECT 
           table_schema as schema,
           table_name as name,
@@ -520,11 +541,11 @@ export class DatabaseStorage implements IStorage {
         FROM information_schema.tables 
         WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
         ORDER BY table_schema, table_name
-      `;
+      `);
       
       return {
         connectionName: connection.name,
-        tables: result.map((row: any) => ({
+        tables: result.rows.map((row: any) => ({
           schema: row.schema,
           name: row.name,
           type: row.type,
@@ -533,6 +554,10 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting DB tables:', error);
       throw new Error(error instanceof Error ? error.message : 'Failed to get tables');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
@@ -600,6 +625,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTableColumns(connectionId: number, tableName: string): Promise<Array<{name: string, type: string}>> {
+    let pool: Pool | null = null;
     try {
       // Get connection details
       const connections = await inventoryDb
@@ -614,34 +640,34 @@ export class DatabaseStorage implements IStorage {
       
       const connection = connections[0];
       
-      // Build connection string
-      const sslParam = connection.ssl ? `?sslmode=${connection.ssl}` : '';
-      const connectionString = `postgresql://${connection.username}:${connection.password}@${connection.host}:${connection.port}/${connection.database}${sslParam}`;
-      
       // Connect and get columns
-      const testDb = neon(connectionString);
+      pool = this.createExternalPool(connection);
       
       // Parse schema and table name
       const [schema, table] = tableName.includes('.') 
         ? tableName.split('.') 
         : ['public', tableName];
       
-      const result = await testDb`
+      const result = await pool.query(`
         SELECT 
           column_name as name,
           data_type as type
         FROM information_schema.columns 
-        WHERE table_schema = ${schema} AND table_name = ${table}
+        WHERE table_schema = $1 AND table_name = $2
         ORDER BY ordinal_position
-      `;
+      `, [schema, table]);
       
-      return result.map((row: any) => ({
+      return result.rows.map((row: any) => ({
         name: row.name,
         type: row.type,
       }));
     } catch (error) {
       console.error('Error getting table columns:', error);
       throw new Error(error instanceof Error ? error.message : 'Failed to get columns');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
     }
   }
 
