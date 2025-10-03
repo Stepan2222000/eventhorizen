@@ -6,6 +6,19 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
+**October 4, 2025 - Stock Validation System:**
+- ✅ **Critical Business Logic**: Система теперь ПРОВЕРЯЕТ остатки перед операциями продажи/списания
+- ✅ **InsufficientStockError**: Кастомный класс ошибки с деталями (article, smart, currentStock, requestedQty)
+- ✅ **Validation Rules**: 
+  - sale/writeoff - всегда требуют достаточный остаток
+  - adjust с отрицательным delta - требует достаточный остаток
+  - purchase/return - проверка не требуется
+- ✅ **HTTP 409 Conflict**: Понятные сообщения на русском при недостаточном остатке
+- ✅ **Race Condition Protection**: SERIALIZABLE транзакции предотвращают создание отрицательных остатков
+- ✅ **Automatic Retry**: До 3 попыток с exponential backoff при конфликтах сериализации
+- ✅ **Transaction Safety**: BEGIN...COMMIT обертка с автоматическим ROLLBACK при ошибках
+- ✅ **Full Test Coverage**: E2E тесты покрывают все сценарии (недостаточный остаток, успешные операции, edge cases)
+
 **October 3, 2025 - Article Autocomplete in Movement Form:**
 - ✅ **Live Autocomplete**: Real-time article suggestions appear as user types (min 2 characters)
 - ✅ **Debounced Search**: 300ms debounce prevents excessive API calls during typing
