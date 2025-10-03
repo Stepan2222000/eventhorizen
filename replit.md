@@ -6,6 +6,16 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
+**October 3, 2025 - Article Autocomplete in Movement Form:**
+- ✅ **Live Autocomplete**: Real-time article suggestions appear as user types (min 2 characters)
+- ✅ **Debounced Search**: 300ms debounce prevents excessive API calls during typing
+- ✅ **Popover UI**: Results displayed in sleek dropdown using Radix Popover + Command components
+- ✅ **Rich Results Display**: Shows article codes, SMART codes, and product names in suggestions
+- ✅ **Auto SMART Fill**: Selecting a suggestion automatically fills both article and SMART code fields
+- ✅ **Memory Safe**: Proper cleanup on component unmount prevents memory leaks
+- ✅ **Keyboard Navigation**: Escape to close, Enter for manual search still works
+- ✅ **Full Test Coverage**: e2e tests verify autocomplete flow with real database data
+
 **October 3, 2025 - Auto-Fill Movement Form from Search Results:**
 - ✅ **URL Parameter Passing**: "Добавить движение" button passes smart code and article via URL query params (?smart=X&article=Y)
 - ✅ **Form Auto-Fill**: AddMovement page reads URL params and auto-fills form using form.reset() for reliable initialization
