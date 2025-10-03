@@ -239,6 +239,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMovement(movement: InsertMovement): Promise<Movement> {
+    // Retry logic for serialization failures
+    const maxRetries = 3;
+    let lastError: any;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this.createMovementAttempt(movement);
+      } catch (error: any) {
+        // Check if this is a serialization error
+        const isSerializationError = 
+          error?.code === '40001' || 
+          error?.message?.includes('could not serialize access');
+        
+        if (isSerializationError && attempt < maxRetries - 1) {
+          // Wait before retry with exponential backoff
+          const delayMs = Math.min(100 * Math.pow(2, attempt), 1000);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          lastError = error;
+          continue;
+        }
+        
+        // Not a serialization error or retries exhausted
+        throw error;
+      }
+    }
+    
+    // All retries exhausted
+    throw new Error(`Failed to create movement after ${maxRetries} attempts due to concurrent access: ${lastError?.message}`);
+  }
+
+  private async createMovementAttempt(movement: InsertMovement): Promise<Movement> {
     let pool: Pool | null = null;
     try {
       // Verify SMART code exists
@@ -270,8 +301,10 @@ export class DatabaseStorage implements IStorage {
       // Connect to external DB
       pool = this.createExternalPool(conn);
       
-      // Start transaction for stock validation
-      await pool.query('BEGIN');
+      // Start transaction with SERIALIZABLE isolation for stock validation
+      // This prevents race conditions where two concurrent transactions both read
+      // the same stock level and both insert, potentially creating negative stock
+      await pool.query('BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       
       try {
         // Get current stock for this article+smart combination
