@@ -228,6 +228,16 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  private async getCurrentStock(pool: Pool, smart: string, article: string): Promise<number> {
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(qty_delta), 0)::int as total_qty
+       FROM inventory.movements
+       WHERE smart = $1 AND article = $2`,
+      [smart, article]
+    );
+    return result.rows[0]?.total_qty || 0;
+  }
+
   async createMovement(movement: InsertMovement): Promise<Movement> {
     let pool: Pool | null = null;
     try {
