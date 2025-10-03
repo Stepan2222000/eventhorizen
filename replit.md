@@ -6,6 +6,15 @@ This is an internal inventory tracking system that links user-entered article co
 
 ## Recent Changes
 
+**October 3, 2025 - Auto-Fill Movement Form from Search Results:**
+- ✅ **URL Parameter Passing**: "Добавить движение" button passes smart code and article via URL query params (?smart=X&article=Y)
+- ✅ **Form Auto-Fill**: AddMovement page reads URL params and auto-fills form using form.reset() for reliable initialization
+- ✅ **User Intent Preservation**: Passes original search query (searchQuery) instead of first array element to preserve user input
+- ✅ **SMART Field Protection**: Locked SMART input against manual edits via onKeyDown/onPaste preventDefault while allowing programmatic updates
+- ✅ **XSS Prevention**: Toast messages use static content to prevent XSS via URL parameters
+- ✅ **Single Toast**: hasPrefilled flag ensures toast notification appears only once per navigation
+- ✅ **Full Test Coverage**: e2e tests verify complete flow from search → selection → auto-filled form → movement creation
+
 **October 3, 2025 - UI Improvements & Navigation Fix:**
 - ✅ **Article Display**: Fixed article text wrapping in search results (flex-col layout with break-words)
 - ✅ **Navigation Buttons**: Added working onClick handlers for "Добавить движение" and history buttons
