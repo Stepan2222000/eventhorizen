@@ -56,21 +56,74 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   async searchSmart(normalizedArticle: string): Promise<Smart[]> {
     try {
-      const result = await partsDb
-        .select()
-        .from(smart)
-        .where(
-          sql`EXISTS (
-            SELECT 1 FROM jsonb_array_elements_text(${smart.articles}) as article
-            WHERE TRANSLATE(
-              UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
-              'АВЕКМНОРСТУХЁ',
-              'ABEKMHOPCTYXE'
-            ) = ${normalizedArticle}
-          )`
-        );
+      // Get active SMART connection
+      const activeConn = await this.getActiveConnection('smart');
       
-      return result;
+      if (!activeConn) {
+        console.log('No active SMART connection found');
+        return [];
+      }
+      
+      // Get full connection details (including password)
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      const fieldMapping = (conn.fieldMapping as any) || {};
+      
+      // Build connection string
+      const sslParam = conn.ssl ? `?sslmode=${conn.ssl}` : '';
+      const connectionString = `postgresql://${conn.username}:${conn.password}@${conn.host}:${conn.port}/${conn.database}${sslParam}`;
+      
+      // Connect to external DB
+      const externalDb = neon(connectionString);
+      
+      // Get field names from mapping or use defaults
+      const smartField = fieldMapping.smart || 'smart';
+      const articlesField = fieldMapping.articles || 'articles';
+      const nameField = fieldMapping.name || 'name';
+      const brandField = fieldMapping.brand || 'brand';
+      const descField = fieldMapping.description || 'description';
+      
+      // Parse table name (schema.table or just table)
+      const tableName = conn.tableName || 'public.smart';
+      
+      // Build and execute search query with normalization
+      // Note: Using template literals for identifiers (validated from DB schema)
+      const query = `
+        SELECT 
+          "${smartField}" as smart,
+          "${articlesField}" as articles,
+          "${nameField}" as name,
+          "${brandField}" as brand,
+          "${descField}" as description
+        FROM ${tableName}
+        WHERE EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text("${articlesField}") as article
+          WHERE TRANSLATE(
+            UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
+            'АВЕКМНОРСТУХЁ',
+            'ABEKMHOPCTYXE'
+          ) = $1
+        )
+      `;
+      
+      const result = await externalDb(query, [normalizedArticle]);
+      
+      return result.map((row: any) => ({
+        smart: row.smart,
+        articles: row.articles,
+        name: row.name,
+        brand: row.brand,
+        description: row.description,
+      }));
     } catch (error) {
       console.error('Error searching SMART:', error);
       throw new Error('Failed to search SMART database');
@@ -79,13 +132,69 @@ export class DatabaseStorage implements IStorage {
 
   async getSmartByCode(smartCode: string): Promise<Smart | undefined> {
     try {
-      const result = await partsDb
+      // Get active SMART connection
+      const activeConn = await this.getActiveConnection('smart');
+      
+      if (!activeConn) {
+        console.log('No active SMART connection found');
+        return undefined;
+      }
+      
+      // Get full connection details (including password)
+      const fullConnections = await inventoryDb
         .select()
-        .from(smart)
-        .where(eq(smart.smart, smartCode))
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
         .limit(1);
       
-      return result[0];
+      if (!fullConnections.length) {
+        return undefined;
+      }
+      
+      const conn = fullConnections[0];
+      const fieldMapping = (conn.fieldMapping as any) || {};
+      
+      // Build connection string
+      const sslParam = conn.ssl ? `?sslmode=${conn.ssl}` : '';
+      const connectionString = `postgresql://${conn.username}:${conn.password}@${conn.host}:${conn.port}/${conn.database}${sslParam}`;
+      
+      // Connect to external DB
+      const externalDb = neon(connectionString);
+      
+      // Get field names from mapping or use defaults
+      const smartField = fieldMapping.smart || 'smart';
+      const articlesField = fieldMapping.articles || 'articles';
+      const nameField = fieldMapping.name || 'name';
+      const brandField = fieldMapping.brand || 'brand';
+      const descField = fieldMapping.description || 'description';
+      
+      // Parse table name (schema.table or just table)
+      const tableName = conn.tableName || 'public.smart';
+      
+      // Build and execute query
+      const query = `
+        SELECT 
+          "${smartField}" as smart,
+          "${articlesField}" as articles,
+          "${nameField}" as name,
+          "${brandField}" as brand,
+          "${descField}" as description
+        FROM ${tableName}
+        WHERE "${smartField}" = $1
+        LIMIT 1
+      `;
+      
+      const result = await externalDb(query, [smartCode]);
+      
+      if (result.length === 0) return undefined;
+      
+      return {
+        smart: result[0].smart,
+        articles: result[0].articles,
+        name: result[0].name,
+        brand: result[0].brand,
+        description: result[0].description,
+      };
     } catch (error) {
       console.error('Error getting SMART by code:', error);
       throw new Error('Failed to get SMART code');
