@@ -668,28 +668,8 @@ export class DatabaseStorage implements IStorage {
       const username = url.username;
       const password = url.password;
 
-      // Create SMART connection
-      await inventoryDb.insert(dbConnections).values({
-        name: 'По умолчанию (SMART)',
-        host,
-        port,
-        database,
-        username,
-        password,
-        role: 'smart',
-        tableName: 'public.smart',
-        fieldMapping: {
-          smart: 'smart',
-          articles: 'articles',
-          name: 'name',
-          brand: 'brand',
-          description: 'description',
-        } as any,
-        isActive: true,
-        updatedAt: new Date(),
-      });
-
-      // Create Inventory connection
+      // NO longer creating default SMART connection - user must configure external DB
+      // Create Inventory connection only
       await inventoryDb.insert(dbConnections).values({
         name: 'По умолчанию (Учёт)',
         host,
