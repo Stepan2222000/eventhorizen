@@ -31,12 +31,33 @@ export async function initializeInventoryDb() {
     // Insert fixed reasons
     await pool.query(`
       INSERT INTO inventory.reasons (code, title) VALUES
-        ('purchase', 'Purchase'),
-        ('sale', 'Sale'),
-        ('return', 'Return'),
-        ('adjust', 'Adjustment'),
-        ('writeoff', 'Write-off')
+        ('purchase', 'Добавление нового товара'),
+        ('sale', 'Продажа'),
+        ('return', 'Возврат'),
+        ('writeoff', 'Списание')
       ON CONFLICT (code) DO NOTHING
+    `);
+    
+    // Remove old 'adjust' reason if exists
+    await pool.query(`DELETE FROM inventory.reasons WHERE code = 'adjust'`);
+    
+    // Create shipping_methods table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inventory.shipping_methods (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    
+    // Insert default shipping methods
+    await pool.query(`
+      INSERT INTO inventory.shipping_methods (name) VALUES
+        ('Почта России'),
+        ('Яндекс'),
+        ('СДЭК'),
+        ('Авито доставка')
+      ON CONFLICT DO NOTHING
     `);
     
     // Create movements table
@@ -48,8 +69,16 @@ export async function initializeInventoryDb() {
         qty_delta INTEGER NOT NULL,
         reason VARCHAR NOT NULL,
         note TEXT,
+        purchase_price NUMERIC(10, 2),
+        sale_price NUMERIC(10, 2),
+        delivery_price NUMERIC(10, 2),
+        box_number VARCHAR(50),
+        track_number TEXT,
+        shipping_method_id INTEGER,
+        sale_status VARCHAR(50),
         created_at TIMESTAMP DEFAULT NOW() NOT NULL,
-        FOREIGN KEY (reason) REFERENCES inventory.reasons(code)
+        FOREIGN KEY (reason) REFERENCES inventory.reasons(code),
+        FOREIGN KEY (shipping_method_id) REFERENCES inventory.shipping_methods(id)
       )
     `);
     

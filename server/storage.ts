@@ -1,6 +1,6 @@
 import { eq, sql, and, ilike } from "drizzle-orm";
 import { partsDb, inventoryDb } from "./db";
-import { smart, reasons, movements, dbConnections } from "@shared/schema";
+import { smart, reasons, movements, dbConnections, shippingMethods } from "@shared/schema";
 import type { 
   Smart, 
   Reason, 
@@ -15,7 +15,9 @@ import type {
   DbConnectionTest,
   DbTablesResult,
   ConfigureConnectionPayload,
-  ConnectionRole
+  ConnectionRole,
+  ShippingMethod,
+  InsertShippingMethod
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import { Pool } from "pg";
@@ -41,6 +43,7 @@ export interface IStorage {
   createMovement(movement: InsertMovement): Promise<Movement>;
   getMovements(limit?: number, offset?: number): Promise<Movement[]>;
   getMovementsBySmartAndArticle(smart: string, article: string): Promise<Movement[]>;
+  updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement>;
   
   // Stock operations
   getStockLevels(limit?: number, offset?: number): Promise<StockLevel[]>;
@@ -49,6 +52,11 @@ export interface IStorage {
   
   // Reasons
   getReasons(): Promise<Reason[]>;
+  
+  // Shipping methods
+  getShippingMethods(): Promise<ShippingMethod[]>;
+  createShippingMethod(method: InsertShippingMethod): Promise<ShippingMethod>;
+  deleteShippingMethod(id: number): Promise<void>;
   
   // Bulk import
   processBulkImport(rows: BulkImportRow[]): Promise<BulkImportResult>;
@@ -327,12 +335,30 @@ export class DatabaseStorage implements IStorage {
           }
         }
         
-        // Insert movement into external DB
+        // Insert movement into external DB with new fields
         const result = await pool.query(
-          `INSERT INTO inventory.movements (smart, article, qty_delta, reason, note, created_at)
-           VALUES ($1, $2, $3, $4, $5, NOW())
+          `INSERT INTO inventory.movements (
+            smart, article, qty_delta, reason, note,
+            purchase_price, sale_price, delivery_price,
+            box_number, track_number, shipping_method_id, sale_status,
+            created_at
+          )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
            RETURNING *`,
-          [movement.smart, movement.article, movement.qtyDelta, movement.reason, movement.note]
+          [
+            movement.smart, 
+            movement.article, 
+            movement.qtyDelta, 
+            movement.reason, 
+            movement.note,
+            movement.purchasePrice || null,
+            movement.salePrice || null,
+            movement.deliveryPrice || null,
+            movement.boxNumber || null,
+            movement.trackNumber || null,
+            movement.shippingMethodId || null,
+            movement.saleStatus || null
+          ]
         );
         
         // Commit transaction
@@ -347,6 +373,13 @@ export class DatabaseStorage implements IStorage {
           qtyDelta: row.qty_delta,
           reason: row.reason,
           note: row.note,
+          purchasePrice: row.purchase_price,
+          salePrice: row.sale_price,
+          deliveryPrice: row.delivery_price,
+          boxNumber: row.box_number,
+          trackNumber: row.track_number,
+          shippingMethodId: row.shipping_method_id,
+          saleStatus: row.sale_status,
           createdAt: row.created_at,
         };
       } catch (txError) {
@@ -407,6 +440,13 @@ export class DatabaseStorage implements IStorage {
         qtyDelta: row.qty_delta,
         reason: row.reason,
         note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
         createdAt: row.created_at,
       }));
     } catch (error) {
@@ -458,6 +498,13 @@ export class DatabaseStorage implements IStorage {
         qtyDelta: row.qty_delta,
         reason: row.reason,
         note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
         createdAt: row.created_at,
       }));
     } catch (error) {
@@ -660,6 +707,189 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting reasons:', error);
       throw new Error('Failed to get reasons');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async getShippingMethods(): Promise<ShippingMethod[]> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT id, name, created_at FROM inventory.shipping_methods ORDER BY name`
+      );
+      
+      return result.rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        createdAt: row.created_at,
+      }));
+    } catch (error) {
+      console.error('Error getting shipping methods:', error);
+      throw new Error('Failed to get shipping methods');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async createShippingMethod(method: InsertShippingMethod): Promise<ShippingMethod> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        throw new Error('No active inventory connection configured');
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        throw new Error('Inventory connection not found');
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `INSERT INTO inventory.shipping_methods (name) 
+         VALUES ($1) 
+         RETURNING *`,
+        [method.name]
+      );
+      
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        name: row.name,
+        createdAt: row.created_at,
+      };
+    } catch (error) {
+      console.error('Error creating shipping method:', error);
+      throw error;
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async deleteShippingMethod(id: number): Promise<void> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        throw new Error('No active inventory connection configured');
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        throw new Error('Inventory connection not found');
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      await pool.query(
+        `DELETE FROM inventory.shipping_methods WHERE id = $1`,
+        [id]
+      );
+    } catch (error) {
+      console.error('Error deleting shipping method:', error);
+      throw error;
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        throw new Error('No active inventory connection configured');
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        throw new Error('Inventory connection not found');
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `UPDATE inventory.movements 
+         SET sale_status = $1 
+         WHERE id = $2 
+         RETURNING *`,
+        [status, id]
+      );
+      
+      if (result.rows.length === 0) {
+        throw new Error('Movement not found');
+      }
+      
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
+        createdAt: row.created_at,
+      };
+    } catch (error) {
+      console.error('Error updating movement sale status:', error);
+      throw error;
     } finally {
       if (pool) {
         await pool.end();

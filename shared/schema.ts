@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, pgSchema, text, varchar, integer, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, pgSchema, text, varchar, integer, timestamp, jsonb, boolean, numeric, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -21,6 +21,12 @@ export const reasons = inventorySchema.table("reasons", {
   title: text("title").notNull(),
 });
 
+export const shippingMethods = inventorySchema.table("shipping_methods", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const movements = inventorySchema.table("movements", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   smart: varchar("smart").notNull(),
@@ -28,6 +34,20 @@ export const movements = inventorySchema.table("movements", {
   qtyDelta: integer("qty_delta").notNull(),
   reason: varchar("reason").notNull(),
   note: text("note"),
+  
+  // Financial fields
+  purchasePrice: numeric("purchase_price", { precision: 10, scale: 2 }),
+  salePrice: numeric("sale_price", { precision: 10, scale: 2 }),
+  deliveryPrice: numeric("delivery_price", { precision: 10, scale: 2 }),
+  
+  // Warehouse tracking
+  boxNumber: varchar("box_number", { length: 50 }),
+  
+  // Shipping tracking (only for sales)
+  trackNumber: text("track_number"),
+  shippingMethodId: integer("shipping_method_id"),
+  saleStatus: varchar("sale_status", { length: 50 }), // 'awaiting_shipment', 'shipped'
+  
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -38,19 +58,33 @@ export type InsertSmart = typeof smart.$inferInsert;
 export type Reason = typeof reasons.$inferSelect;
 export type InsertReason = typeof reasons.$inferInsert;
 
+export type ShippingMethod = typeof shippingMethods.$inferSelect;
+export type InsertShippingMethod = typeof shippingMethods.$inferInsert;
+
 export type Movement = typeof movements.$inferSelect;
 export type InsertMovement = typeof movements.$inferInsert;
 
 // Zod schemas
-export const insertMovementSchema = createInsertSchema(movements).pick({
-  smart: true,
-  article: true,
-  qtyDelta: true,
-  reason: true,
-  note: true,
+export const insertMovementSchema = z.object({
+  smart: z.string().min(1, "SMART код обязателен"),
+  article: z.string().min(1, "Артикул обязателен"),
+  qtyDelta: z.number().int(),
+  reason: z.enum(['purchase', 'sale', 'return', 'writeoff']),
+  note: z.string().optional().nullable(),
+  purchasePrice: z.string().optional().nullable(),
+  salePrice: z.string().optional().nullable(),
+  deliveryPrice: z.string().optional().nullable(),
+  boxNumber: z.string().optional().nullable(),
+  trackNumber: z.string().optional().nullable(),
+  shippingMethodId: z.number().optional().nullable(),
+  saleStatus: z.enum(['awaiting_shipment', 'shipped']).optional().nullable(),
 });
 
 export const insertReasonSchema = createInsertSchema(reasons);
+
+export const insertShippingMethodSchema = z.object({
+  name: z.string().min(1, "Название обязательно"),
+});
 
 // Stock level type for VIEW
 export type StockLevel = {
@@ -110,12 +144,7 @@ export const dbConnections = inventorySchema.table("db_connections", {
 
 export type DbConnection = typeof dbConnections.$inferSelect;
 
-export const insertDbConnectionSchema = createInsertSchema(dbConnections).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  isActive: true, // managed by backend
-}).extend({
+export const insertDbConnectionSchema = z.object({
   name: z.string().min(1, "Название обязательно"),
   host: z.string().min(1, "Хост обязателен"),
   port: z.number().int().positive().default(5432),
