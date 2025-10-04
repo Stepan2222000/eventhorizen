@@ -21,7 +21,9 @@ import { DisambiguationModal } from "@/components/disambiguation-modal";
 import { Check } from "lucide-react";
 
 const formSchema = insertMovementSchema.extend({
-  qtyDelta: z.number().int().min(-999999).max(999999),
+  qtyDelta: z.number().int().min(-999999).max(999999).refine((val) => val !== 0, {
+    message: "Количество не может быть равно 0",
+  }),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -432,42 +434,51 @@ export default function AddMovement() {
                   />
 
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>
-                        Изменение количества <span className="text-destructive">*</span>
-                      </Label>
-                      <div className="flex gap-2">
-                        <Button 
-                          type="button" 
-                          variant="destructive" 
-                          size="icon"
-                          onClick={decrementQty}
-                          data-testid="button-decrement-qty"
-                        >
-                          <i className="fas fa-minus"></i>
-                        </Button>
-                        <Input
-                          type="number"
-                          className="font-mono text-center"
-                          value={qtyInput}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value) || 0;
-                            setQtyInput(val);
-                            form.setValue('qtyDelta', val);
-                          }}
-                          data-testid="input-qty-delta"
-                        />
-                        <Button 
-                          type="button" 
-                          className="bg-success text-success-foreground hover:bg-success/90"
-                          size="icon"
-                          onClick={incrementQty}
-                          data-testid="button-increment-qty"
-                        >
-                          <i className="fas fa-plus"></i>
-                        </Button>
-                      </div>
-                    </div>
+                    <FormField
+                      control={form.control}
+                      name="qtyDelta"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            Изменение количества <span className="text-destructive">*</span>
+                          </FormLabel>
+                          <div className="flex gap-2">
+                            <Button 
+                              type="button" 
+                              variant="destructive" 
+                              size="icon"
+                              onClick={decrementQty}
+                              data-testid="button-decrement-qty"
+                            >
+                              <i className="fas fa-minus"></i>
+                            </Button>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                className="font-mono text-center"
+                                value={qtyInput}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value) || 0;
+                                  setQtyInput(val);
+                                  field.onChange(val);
+                                }}
+                                data-testid="input-qty-delta"
+                              />
+                            </FormControl>
+                            <Button 
+                              type="button" 
+                              className="bg-success text-success-foreground hover:bg-success/90"
+                              size="icon"
+                              onClick={incrementQty}
+                              data-testid="button-increment-qty"
+                            >
+                              <i className="fas fa-plus"></i>
+                            </Button>
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
                     <FormField
                       control={form.control}

@@ -68,7 +68,9 @@ export type InsertMovement = typeof movements.$inferInsert;
 export const insertMovementSchema = z.object({
   smart: z.string().min(1, "SMART код обязателен"),
   article: z.string().min(1, "Артикул обязателен"),
-  qtyDelta: z.number().int(),
+  qtyDelta: z.number().int().refine((val) => val !== 0, {
+    message: "Количество не может быть равно 0",
+  }),
   reason: z.enum(['purchase', 'sale', 'return', 'writeoff']),
   note: z.string().optional().nullable(),
   purchasePrice: z.string().optional().nullable(),
@@ -86,10 +88,9 @@ export const insertShippingMethodSchema = z.object({
   name: z.string().min(1, "Название обязательно"),
 });
 
-// Stock level type for VIEW
+// Stock level type for VIEW (grouped by SMART code only)
 export type StockLevel = {
   smart: string;
-  article: string;
   totalQty: number;
   brand?: string;
   description?: string;

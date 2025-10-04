@@ -238,11 +238,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   private async getCurrentStock(pool: Pool, smart: string, article: string): Promise<number> {
+    // Stock is now grouped by SMART code only, not by article
+    // Check total stock for the SMART code regardless of article
     const result = await pool.query(
       `SELECT COALESCE(SUM(qty_delta), 0)::int as total_qty
        FROM inventory.movements
-       WHERE smart = $1 AND article = $2`,
-      [smart, article]
+       WHERE smart = $1`,
+      [smart]
     );
     return result.rows[0]?.total_qty || 0;
   }
@@ -605,11 +607,11 @@ export class DatabaseStorage implements IStorage {
       const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
-      // Get stock aggregates from inventory view
+      // Get stock aggregates from inventory view (grouped by SMART only)
       const result = await pool.query(
-        `SELECT smart, article, total_qty
+        `SELECT smart, total_qty
          FROM inventory.stock
-         ORDER BY smart, article
+         ORDER BY smart
          LIMIT $1 OFFSET $2`,
         [limit, offset]
       );
@@ -620,7 +622,6 @@ export class DatabaseStorage implements IStorage {
           const smartData = await this.getSmartByCode(row.smart);
           return {
             smart: row.smart,
-            article: row.article,
             totalQty: row.total_qty,
             brand: smartData?.brand || undefined,
             description: smartData?.description || undefined,
@@ -641,60 +642,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getStockBySmartAndArticle(smartCode: string, article: string): Promise<StockLevel | undefined> {
-    let pool: Pool | null = null;
-    try {
-      // Get active inventory connection
-      const activeConn = await this.getActiveConnection('inventory');
-      
-      if (!activeConn) {
-        return undefined;
-      }
-      
-      // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
-        return undefined;
-      }
-      
-      const conn = fullConnections[0];
-      pool = this.createExternalPool(conn);
-      
-      const result = await pool.query(
-        `SELECT smart, article, total_qty
-         FROM inventory.stock
-         WHERE smart = $1 AND article = $2
-         LIMIT 1`,
-        [smartCode, article]
-      );
-      
-      if (result.rows.length === 0) return undefined;
-      
-      const row = result.rows[0];
-      
-      // Enrich with SMART reference data from active connection
-      const smartData = await this.getSmartByCode(smartCode);
-      
-      return {
-        smart: row.smart,
-        article: row.article,
-        totalQty: row.total_qty,
+    // Since stock is now grouped by SMART only, just get stock by SMART code
+    // (article parameter is kept for backwards compatibility but not used)
+    return this.getTotalStockBySmart(smartCode).then(totalQty => {
+      if (totalQty === 0) return undefined;
+      return this.getSmartByCode(smartCode).then(smartData => ({
+        smart: smartCode,
+        totalQty,
         brand: smartData?.brand || undefined,
         description: smartData?.description || undefined,
         name: smartData?.name || undefined,
-      };
-    } catch (error) {
-      console.error('Error getting stock by SMART and article:', error);
-      throw new Error('Failed to get stock');
-    } finally {
-      if (pool) {
-        await pool.end();
-      }
-    }
+      }));
+    });
   }
 
   async getTotalStockBySmart(smartCode: string): Promise<number> {
@@ -721,14 +680,15 @@ export class DatabaseStorage implements IStorage {
       const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
+      // View already groups by SMART, so just get the total_qty directly
       const result = await pool.query(
-        `SELECT SUM(total_qty) as total
+        `SELECT total_qty
          FROM inventory.stock
          WHERE smart = $1`,
         [smartCode]
       );
       
-      return result.rows[0]?.total || 0;
+      return result.rows[0]?.total_qty || 0;
     } catch (error) {
       console.error('Error getting total stock by SMART:', error);
       throw new Error('Failed to get total stock');
@@ -1401,15 +1361,14 @@ export class DatabaseStorage implements IStorage {
         )
       `);
       
-      // Create stock VIEW
+      // Create stock VIEW (grouped by SMART code only to aggregate across all articles)
       await pool.query(`
         CREATE OR REPLACE VIEW inventory.stock AS
         SELECT 
           smart,
-          article,
           SUM(qty_delta) as total_qty
         FROM inventory.movements
-        GROUP BY smart, article
+        GROUP BY smart
       `);
       
       console.log('External inventory schema initialized successfully');
