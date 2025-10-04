@@ -4,6 +4,10 @@
 
 This project is an internal inventory tracking system designed to link user-entered article codes with a standardized SMART reference database. It features robust fuzzy matching for article variants, maintains a complete movement history, and calculates current stock levels from transaction deltas. The system also includes financial tracking for purchase and sale operations, warehouse tracking (box numbers), and a two-phase sales workflow with shipping integration. A critical business logic ensures stock validation before sales/write-offs, preventing negative stock levels. The system automatically handles schema migrations and is localized entirely in Russian for internal network users.
 
+### Recent Fixes (October 2025)
+- **Autofill Fixed**: URL parameter autofill now correctly uses `window.location.search` instead of wouter's location (which doesn't include query strings). Article and SMART code fields are automatically populated when navigating from search results.
+- **Complete E2E Workflow Validated**: Full purchase → sale → sold items page workflow tested and working correctly with all financial fields, shipping tracking, and status management.
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

@@ -60,13 +60,10 @@ export default function AddMovement() {
 
   // Pre-fill form from URL parameters
   useEffect(() => {
-    // Extract query string from location
-    const queryString = location.split('?')[1];
-    if (!queryString) return;
-    
-    const params = new URLSearchParams(queryString);
-    const smart = params.get('smart');
-    const article = params.get('article');
+    // Use window.location.search because wouter's location doesn't include query string
+    const searchParams = new URLSearchParams(window.location.search);
+    const smart = searchParams.get('smart');
+    const article = searchParams.get('article');
     
     // Only prefill if both params exist and haven't already prefilled
     if (smart && article && !hasPrefilled) {
