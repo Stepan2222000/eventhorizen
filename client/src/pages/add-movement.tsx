@@ -46,7 +46,7 @@ export default function AddMovement() {
       smart: "",
       article: "",
       qtyDelta: 0,
-      reason: "",
+      reason: undefined as any,
       note: "",
       purchasePrice: null,
       salePrice: null,
@@ -74,8 +74,15 @@ export default function AddMovement() {
         smart,
         article,
         qtyDelta: 0,
-        reason: "",
+        reason: undefined as any,
         note: "",
+        purchasePrice: null,
+        salePrice: null,
+        deliveryPrice: null,
+        boxNumber: null,
+        trackNumber: null,
+        shippingMethodId: null,
+        saleStatus: null,
       });
       setHasPrefilled(true);
       toast({
@@ -83,7 +90,7 @@ export default function AddMovement() {
         description: "Артикул и SMART код автоматически заполнены из результатов поиска",
       });
     }
-  }, [location]);
+  }, [location, hasPrefilled, form, toast]);
 
   // Cleanup debounce timeout on unmount
   useEffect(() => {
