@@ -166,6 +166,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get shipping methods
+  app.get("/api/shipping-methods", async (req, res) => {
+    try {
+      const methods = await storage.getShippingMethods();
+      res.json(methods);
+    } catch (error) {
+      console.error("Get shipping methods error:", error);
+      res.status(500).json({ error: "Failed to get shipping methods" });
+    }
+  });
+
+  // Create shipping method
+  app.post("/api/shipping-methods", async (req, res) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== 'string') {
+        return res.status(400).json({ error: "Name is required" });
+      }
+      
+      const method = await storage.createShippingMethod({ name });
+      res.status(201).json(method);
+    } catch (error) {
+      console.error("Create shipping method error:", error);
+      res.status(500).json({ error: "Failed to create shipping method" });
+    }
+  });
+
+  // Delete shipping method
+  app.delete("/api/shipping-methods/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      
+      await storage.deleteShippingMethod(id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Delete shipping method error:", error);
+      res.status(500).json({ error: "Failed to delete shipping method" });
+    }
+  });
+
+  // Update movement sale status
+  app.patch("/api/movements/:id/status", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      
+      const { status } = req.body;
+      if (status !== 'awaiting_shipment' && status !== 'shipped') {
+        return res.status(400).json({ error: "Invalid status. Must be 'awaiting_shipment' or 'shipped'" });
+      }
+      
+      const movement = await storage.updateMovementSaleStatus(id, status);
+      res.json(movement);
+    } catch (error) {
+      console.error("Update movement status error:", error);
+      res.status(500).json({ error: "Failed to update movement status" });
+    }
+  });
+
   // Bulk import
   app.post("/api/bulk-import", upload.single('file'), async (req, res) => {
     try {
