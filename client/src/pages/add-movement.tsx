@@ -48,6 +48,13 @@ export default function AddMovement() {
       qtyDelta: 0,
       reason: "",
       note: "",
+      purchasePrice: null,
+      salePrice: null,
+      deliveryPrice: null,
+      boxNumber: null,
+      trackNumber: null,
+      shippingMethodId: null,
+      saleStatus: null,
     },
   });
 
@@ -121,6 +128,13 @@ export default function AddMovement() {
   const { data: reasons } = useQuery({
     queryKey: ["/api/reasons"],
   });
+
+  const { data: shippingMethods } = useQuery({
+    queryKey: ["/api/shipping-methods"],
+  });
+
+  // Watch the reason field to show conditional fields
+  const selectedReason = form.watch("reason");
 
   const searchArticleMutation = useMutation({
     mutationFn: async (query: string) => {
@@ -199,9 +213,13 @@ export default function AddMovement() {
   });
 
   const onSubmit = (data: FormData) => {
+    // Set saleStatus to "awaiting_shipment" for sales
+    const saleStatus = data.reason === "sale" ? "awaiting_shipment" : null;
+    
     createMovementMutation.mutate({
       ...data,
       qtyDelta: qtyInput,
+      saleStatus,
     });
   };
 
@@ -473,6 +491,158 @@ export default function AddMovement() {
                         </FormItem>
                       )}
                     />
+
+                    {/* Conditional fields for purchase */}
+                    {selectedReason === "purchase" && (
+                      <>
+                        <FormField
+                          control={form.control}
+                          name="purchasePrice"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Цена закупки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  {...field}
+                                  value={field.value || ""}
+                                  onChange={(e) => field.onChange(e.target.value || null)}
+                                  data-testid="input-purchase-price"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="boxNumber"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Номер коробки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="Например: K-123"
+                                  {...field}
+                                  value={field.value || ""}
+                                  onChange={(e) => field.onChange(e.target.value || null)}
+                                  data-testid="input-box-number"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </>
+                    )}
+
+                    {/* Conditional fields for sale */}
+                    {selectedReason === "sale" && (
+                      <>
+                        <FormField
+                          control={form.control}
+                          name="salePrice"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Цена продажи <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  {...field}
+                                  value={field.value || ""}
+                                  onChange={(e) => field.onChange(e.target.value || null)}
+                                  data-testid="input-sale-price"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="deliveryPrice"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Стоимость доставки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  {...field}
+                                  value={field.value || ""}
+                                  onChange={(e) => field.onChange(e.target.value || null)}
+                                  data-testid="input-delivery-price"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="shippingMethodId"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Способ доставки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <Select 
+                                onValueChange={(value) => field.onChange(parseInt(value))} 
+                                value={field.value?.toString() || ""}
+                              >
+                                <FormControl>
+                                  <SelectTrigger data-testid="select-shipping-method">
+                                    <SelectValue placeholder="Выберите способ доставки" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {(shippingMethods as any[] || []).map((method: any) => (
+                                    <SelectItem key={method.id} value={method.id.toString()}>
+                                      {method.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="trackNumber"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Трек-номер <span className="text-muted-foreground font-normal">(опционально)</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="Например: RA123456789RU"
+                                  {...field}
+                                  value={field.value || ""}
+                                  onChange={(e) => field.onChange(e.target.value || null)}
+                                  data-testid="input-track-number"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </>
+                    )}
                   </div>
 
                   <FormField
