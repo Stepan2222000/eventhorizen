@@ -241,9 +241,9 @@ export default function AddMovement() {
   };
 
   const handleAutocompleteSelect = (result: ArticleSearchResult) => {
-    // Use the user's search query as the article value
-    const currentArticle = form.getValues('article');
-    form.setValue('article', currentArticle);
+    // Set the full article code from the selected result
+    const fullArticles = result.articles.join(', ');
+    form.setValue('article', fullArticles);
     form.setValue('smart', result.smart);
     setAutocompleteOpen(false);
     setAutocompleteResults([]);

@@ -201,7 +201,7 @@ export default function ArticleSearch() {
                       onClick={() => {
                         const params = new URLSearchParams({
                           smart: selectedResult.smart,
-                          article: searchQuery.trim()
+                          article: selectedResult.articles.join(', ')
                         });
                         setLocation(`/movement?${params.toString()}`);
                       }}
