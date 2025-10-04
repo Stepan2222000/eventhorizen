@@ -42,6 +42,7 @@ export interface IStorage {
   // Movement operations
   createMovement(movement: InsertMovement): Promise<Movement>;
   getMovements(limit?: number, offset?: number): Promise<Movement[]>;
+  getMovementById(id: number): Promise<Movement | undefined>;
   getMovementsBySmartAndArticle(smart: string, article: string): Promise<Movement[]>;
   updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement>;
   
@@ -452,6 +453,69 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting movements:', error);
       throw new Error('Failed to get movements');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async getMovementById(id: number): Promise<Movement | undefined> {
+    let pool: Pool | null = null;
+    try {
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return undefined;
+      }
+      
+      // Get full connection details (including password)
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return undefined;
+      }
+      
+      const conn = fullConnections[0];
+      
+      // Connect to external DB
+      pool = this.createExternalPool(conn);
+      
+      // Query movement by ID from external DB
+      const result = await pool.query(
+        `SELECT * FROM inventory.movements WHERE id = $1`,
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return undefined;
+      }
+      
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
+        createdAt: row.created_at,
+      };
+    } catch (error) {
+      console.error('Error getting movement by ID:', error);
+      throw new Error('Failed to get movement');
     } finally {
       if (pool) {
         await pool.end();

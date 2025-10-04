@@ -230,6 +230,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Mark sale as shipped
+  app.patch("/api/movements/:id/ship", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      
+      const movement = await storage.updateMovementSaleStatus(id, 'shipped');
+      res.json(movement);
+    } catch (error) {
+      console.error("Mark as shipped error:", error);
+      res.status(500).json({ error: "Failed to mark as shipped" });
+    }
+  });
+
+  // Return sold item to inventory
+  app.post("/api/movements/:id/return", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+      
+      // Get original sale movement
+      const saleMovement = await storage.getMovementById(id);
+      if (!saleMovement) {
+        return res.status(404).json({ error: "Movement not found" });
+      }
+      
+      if (saleMovement.reason !== 'sale') {
+        return res.status(400).json({ error: "Can only return sales" });
+      }
+      
+      // Create return movement (positive qty to add back to inventory)
+      const returnMovement = await storage.createMovement({
+        smart: saleMovement.smart,
+        article: saleMovement.article,
+        qtyDelta: Math.abs(saleMovement.qtyDelta), // Make positive
+        reason: 'return',
+        note: `Возврат продажи #${id}`,
+        purchasePrice: null,
+        salePrice: null,
+        deliveryPrice: null,
+        boxNumber: null,
+        trackNumber: null,
+        shippingMethodId: null,
+        saleStatus: null,
+      });
+      
+      res.status(201).json(returnMovement);
+    } catch (error) {
+      console.error("Return to inventory error:", error);
+      
+      if (error instanceof InsufficientStockError) {
+        return res.status(409).json({ 
+          error: "Недостаточно товара на складе",
+          details: {
+            article: error.article,
+            smart: error.smart,
+            currentStock: error.currentStock,
+            requested: error.requestedQty,
+          }
+        });
+      }
+      
+      res.status(500).json({ error: "Failed to return to inventory" });
+    }
+  });
+
   // Bulk import
   app.post("/api/bulk-import", upload.single('file'), async (req, res) => {
     try {

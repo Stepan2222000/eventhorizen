@@ -9,6 +9,7 @@ import ArticleSearch from "@/pages/article-search";
 import AddMovement from "@/pages/add-movement";
 import StockLevels from "@/pages/stock-levels";
 import MovementHistory from "@/pages/movement-history";
+import SoldItems from "@/pages/sold-items";
 import BulkImport from "@/pages/bulk-import";
 import DbConnections from "@/pages/db-connections";
 import NotFound from "@/pages/not-found";
@@ -21,6 +22,7 @@ function Router() {
       <Route path="/movement" component={AddMovement} />
       <Route path="/stock" component={StockLevels} />
       <Route path="/history" component={MovementHistory} />
+      <Route path="/sold" component={SoldItems} />
       <Route path="/import" component={BulkImport} />
       <Route path="/db-connections" component={DbConnections} />
       <Route component={NotFound} />

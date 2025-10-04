@@ -7,6 +7,7 @@ const navigation = [
   { name: 'Добавить движение', href: '/movement', icon: 'fas fa-plus-circle' },
   { name: 'Остатки', href: '/stock', icon: 'fas fa-warehouse' },
   { name: 'История движений', href: '/history', icon: 'fas fa-clock-rotate-left' },
+  { name: 'Проданные товары', href: '/sold', icon: 'fas fa-shopping-cart' },
   { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
   { name: 'Подключения БД', href: '/db-connections', icon: 'fas fa-database' },
 ];
