@@ -127,7 +127,7 @@ export class DatabaseStorage implements IStorage {
       
       // Build and execute search query with normalization
       // Note: Using template literals for identifiers (validated from DB schema)
-      // Using LIKE for partial matching (user can search "5VX" to find "5VX-25806-00-00")
+      // Supports searching by SMART code OR by article number
       const query = `
         SELECT 
           "${smartField}" as smart,
@@ -136,14 +136,23 @@ export class DatabaseStorage implements IStorage {
           "${brandField}" as brand,
           "${descField}" as description
         FROM ${tableName}
-        WHERE EXISTS (
-          SELECT 1 FROM unnest("${articlesField}") as article
-          WHERE TRANSLATE(
-            UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
+        WHERE 
+          -- Search by SMART code
+          TRANSLATE(
+            UPPER(REGEXP_REPLACE("${smartField}", '[\\s\\-_./]', '', 'g')),
             'АВЕКМНОРСТУХЁ',
             'ABEKMHOPCTYXE'
           ) LIKE '%' || $1 || '%'
-        )
+          OR
+          -- Search by article variants
+          EXISTS (
+            SELECT 1 FROM unnest("${articlesField}") as article
+            WHERE TRANSLATE(
+              UPPER(REGEXP_REPLACE(article, '[\\s\\-_./]', '', 'g')),
+              'АВЕКМНОРСТУХЁ',
+              'ABEKMHOPCTYXE'
+            ) LIKE '%' || $1 || '%'
+          )
       `;
       
       const result = await pool.query(query, [normalizedArticle]);
