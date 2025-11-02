@@ -10,6 +10,9 @@ This project is an internal inventory tracking system designed to link user-ente
 - **Stock Aggregation Fixed**: inventory.stock VIEW now correctly groups by SMART code only (not SMART+article), eliminating duplicate rows and summing quantities across all article variants.
 - **Zero Quantity Validation**: Added frontend and backend validation to prevent movements with qty_delta = 0. Error message displays below quantity field.
 - **Negative Stock Prevention**: getCurrentStock method now checks total by SMART code (not by article) to prevent overselling across all article variants.
+- **SMART Code Search Enhanced**: Search functionality now works for both SMART codes AND article codes (OR condition in SQL). Autocomplete displays SMART code first for better visibility.
+- **Runtime Errors Fixed**: Added null/length checks for `articles` array before calling `.join()` in autocomplete and disambiguation modal to prevent crashes when SMART-only results are returned.
+- **Button Colors Improved**: Quantity adjustment buttons changed from red/green to orange decrement (`text-orange-600`) and green increment (`text-green-600`) with outline variant for better UX.
 
 ## User Preferences
 
