@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -129,14 +130,16 @@ export default function StockLevels() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                data-testid={`button-view-${item.smart}`}
-                              >
-                                <i className="fas fa-eye text-xs"></i>
-                              </Button>
+                              <Link href={`/stock/${item.smart}`}>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  data-testid={`button-view-${item.smart}`}
+                                >
+                                  <i className="fas fa-eye text-xs"></i>
+                                </Button>
+                              </Link>
                               <Button
                                 variant="ghost"
                                 size="sm"

@@ -44,6 +44,8 @@ export interface IStorage {
   getMovements(limit?: number, offset?: number): Promise<Movement[]>;
   getMovementById(id: number): Promise<Movement | undefined>;
   getMovementsBySmartAndArticle(smart: string, article: string): Promise<Movement[]>;
+  getPurchasesBySmart(smart: string): Promise<Movement[]>;
+  updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note'>>): Promise<Movement>;
   updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement>;
   
   // Stock operations
@@ -940,6 +942,142 @@ export class DatabaseStorage implements IStorage {
       );
     } catch (error) {
       console.error('Error deleting shipping method:', error);
+      throw error;
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async getPurchasesBySmart(smartCode: string): Promise<Movement[]> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT * FROM inventory.movements 
+         WHERE smart = $1 AND reason = 'purchase'
+         ORDER BY created_at DESC`,
+        [smartCode]
+      );
+      
+      return result.rows.map((row: any) => ({
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
+        createdAt: row.created_at,
+      }));
+    } catch (error) {
+      console.error('Error getting purchases by SMART:', error);
+      throw new Error('Failed to get purchases');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note'>>): Promise<Movement> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        throw new Error('No active inventory connection configured');
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        throw new Error('Inventory connection not found');
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+      
+      if (updates.purchasePrice !== undefined) {
+        setClauses.push(`purchase_price = $${paramIndex++}`);
+        values.push(updates.purchasePrice);
+      }
+      
+      if (updates.note !== undefined) {
+        setClauses.push(`note = $${paramIndex++}`);
+        values.push(updates.note);
+      }
+      
+      if (setClauses.length === 0) {
+        throw new Error('No fields to update');
+      }
+      
+      values.push(id);
+      
+      const result = await pool.query(
+        `UPDATE inventory.movements 
+         SET ${setClauses.join(', ')}
+         WHERE id = $${paramIndex}
+         RETURNING *`,
+        values
+      );
+      
+      if (result.rows.length === 0) {
+        throw new Error('Movement not found');
+      }
+      
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
+        createdAt: row.created_at,
+      };
+    } catch (error) {
+      console.error('Error updating movement:', error);
       throw error;
     } finally {
       if (pool) {

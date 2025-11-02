@@ -188,6 +188,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get purchases by SMART code (MUST come before /api/stock/:smart/:article)
+  app.get("/api/stock/:smart/purchases", async (req, res) => {
+    try {
+      const { smart } = req.params;
+      const purchases = await storage.getPurchasesBySmart(smart);
+      res.json(purchases);
+    } catch (error) {
+      console.error("Get purchases by SMART error:", error);
+      res.status(500).json({ error: "Failed to get purchases" });
+    }
+  });
+
   // Get stock by SMART and article
   app.get("/api/stock/:smart/:article", async (req, res) => {
     try {
@@ -202,6 +214,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Get stock by SMART/article error:", error);
       res.status(500).json({ error: "Failed to get stock" });
+    }
+  });
+
+  // Update movement (purchase price and note)
+  app.patch("/api/movements/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { purchasePrice, note } = req.body;
+      
+      const updates: Partial<{purchasePrice: string | null; note: string | null}> = {};
+      
+      if (purchasePrice !== undefined) {
+        updates.purchasePrice = purchasePrice;
+      }
+      
+      if (note !== undefined) {
+        updates.note = note;
+      }
+      
+      const updatedMovement = await storage.updateMovement(id, updates);
+      res.json(updatedMovement);
+    } catch (error) {
+      console.error("Update movement error:", error);
+      res.status(500).json({ error: "Failed to update movement" });
     }
   });
 

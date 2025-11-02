@@ -8,6 +8,7 @@ import Dashboard from "@/pages/dashboard";
 import ArticleSearch from "@/pages/article-search";
 import AddMovement from "@/pages/add-movement";
 import StockLevels from "@/pages/stock-levels";
+import StockDetails from "@/pages/stock-details";
 import MovementHistory from "@/pages/movement-history";
 import SoldItems from "@/pages/sold-items";
 import BulkImport from "@/pages/bulk-import";
@@ -20,6 +21,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/search" component={ArticleSearch} />
       <Route path="/movement" component={AddMovement} />
+      <Route path="/stock/:smart" component={StockDetails} />
       <Route path="/stock" component={StockLevels} />
       <Route path="/history" component={MovementHistory} />
       <Route path="/sold" component={SoldItems} />
