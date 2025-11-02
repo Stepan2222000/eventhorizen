@@ -27,6 +27,22 @@ export default function StockDetails() {
   // Ensure purchases is always an array
   const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
+  // Fetch sales analytics
+  const { data: salesData, isLoading: salesLoading } = useQuery<{
+    sales: (Movement & { profit: number; profitMarginPercent: number; daysFromPurchase: number | null; purchasePriceUsed: number })[];
+    metrics: {
+      averageDaysToSell: number;
+      soldQuantity: number;
+      totalPurchased: number;
+      sellThroughRate: number;
+      averageProfitPerUnit: number;
+      averageProfitMarginPercent: number;
+    };
+  }>({
+    queryKey: [`/api/stock/${smart}/sales`],
+    enabled: !!smart,
+  });
+
   const updateMutation = useMutation({
     mutationFn: async ({ id, field, value }: { id: number; field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'; value: string | number | null }) => {
       const payload: any = {};
@@ -109,7 +125,7 @@ export default function StockDetails() {
             <span className="text-foreground">{smart}</span>
           </div>
           <h2 className="text-2xl font-bold text-foreground">Детали по SMART коду</h2>
-          <p className="text-sm text-muted-foreground mt-1">Просмотр и редактирование покупок</p>
+          <p className="text-sm text-muted-foreground mt-1">Просмотр покупок, продаж и аналитики доходности</p>
         </div>
       </header>
 
@@ -431,6 +447,129 @@ export default function StockDetails() {
                 <div className="mt-4 text-sm text-muted-foreground">
                   Показано {purchases.length} {purchases.length === 1 ? 'запись' : purchases.length < 5 ? 'записи' : 'записей'}
                 </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Sales History Section */}
+        <Card className="bg-card border-border">
+          <CardHeader>
+            <CardTitle className="text-foreground">История продаж</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {salesLoading ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Skeleton key={i} className="h-24" />
+                  ))}
+                </div>
+                <Skeleton className="h-64" />
+              </div>
+            ) : salesData && salesData.sales.length > 0 ? (
+              <div className="space-y-6">
+                {/* Metrics Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <Card className="bg-muted/50 border-border">
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">Среднее время продажи</p>
+                      <p className="text-2xl font-bold text-foreground" data-testid="metric-avg-days">
+                        {salesData.metrics.averageDaysToSell} дн.
+                      </p>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="bg-muted/50 border-border">
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">Продано / Куплено</p>
+                      <p className="text-2xl font-bold text-foreground" data-testid="metric-sell-through">
+                        {salesData.metrics.soldQuantity} из {salesData.metrics.totalPurchased} шт
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        ({salesData.metrics.sellThroughRate}%)
+                      </p>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="bg-muted/50 border-border">
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">Средняя доходность</p>
+                      <p className="text-2xl font-bold text-green-600" data-testid="metric-avg-profit">
+                        +{salesData.metrics.averageProfitPerUnit.toFixed(2)} ₽/шт
+                      </p>
+                    </CardContent>
+                  </Card>
+                  
+                  <Card className="bg-muted/50 border-border">
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">Процент доходности</p>
+                      <p className="text-2xl font-bold text-green-600" data-testid="metric-avg-margin">
+                        +{salesData.metrics.averageProfitMarginPercent.toFixed(1)}%
+                      </p>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Sales Table */}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Дата</TableHead>
+                      <TableHead className="text-center">Кол-во</TableHead>
+                      <TableHead className="text-right">Цена продажи</TableHead>
+                      <TableHead className="text-right">Цена закупа</TableHead>
+                      <TableHead className="text-right">Доставка</TableHead>
+                      <TableHead className="text-right">Прибыль</TableHead>
+                      <TableHead className="text-right">Доходность %</TableHead>
+                      <TableHead className="text-center">Время от покупки</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {salesData.sales.map((sale) => (
+                      <TableRow key={sale.id} data-testid={`sale-row-${sale.id}`}>
+                        <TableCell className="whitespace-nowrap">
+                          {format(new Date(sale.createdAt), "dd.MM.yyyy")}
+                        </TableCell>
+                        <TableCell className="text-center font-mono">
+                          {Math.abs(sale.qtyDelta)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {sale.salePrice ? `${parseFloat(sale.salePrice).toFixed(2)} ₽` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {sale.purchasePriceUsed > 0 ? `${sale.purchasePriceUsed.toFixed(2)} ₽` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {sale.deliveryPrice ? `${parseFloat(sale.deliveryPrice).toFixed(2)} ₽` : "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-bold">
+                          <span className={sale.profit >= 0 ? "text-green-600" : "text-red-600"}>
+                            {sale.profit >= 0 ? "+" : ""}{sale.profit.toFixed(2)} ₽
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-bold">
+                          <span className={sale.profitMarginPercent >= 0 ? "text-green-600" : "text-red-600"}>
+                            {sale.profitMarginPercent >= 0 ? "+" : ""}{sale.profitMarginPercent.toFixed(1)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge variant="secondary">
+                            {sale.daysFromPurchase !== null ? `${sale.daysFromPurchase} дн.` : "—"}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                <div className="mt-4 text-sm text-muted-foreground">
+                  Показано {salesData.sales.length} {salesData.sales.length === 1 ? 'продажа' : salesData.sales.length < 5 ? 'продажи' : 'продаж'}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <p>Продаж пока не было</p>
               </div>
             )}
           </CardContent>

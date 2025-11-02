@@ -45,6 +45,7 @@ export interface IStorage {
   getMovementById(id: number): Promise<Movement | undefined>;
   getMovementsBySmartAndArticle(smart: string, article: string): Promise<Movement[]>;
   getPurchasesBySmart(smart: string): Promise<Movement[]>;
+  getSalesBySmart(smart: string): Promise<Movement[]>;
   updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'>>): Promise<Movement>;
   updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement>;
   
@@ -998,6 +999,61 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting purchases by SMART:', error);
       throw new Error('Failed to get purchases');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async getSalesBySmart(smartCode: string): Promise<Movement[]> {
+    let pool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      const result = await pool.query(
+        `SELECT * FROM inventory.movements 
+         WHERE smart = $1 AND reason = 'sale'
+         ORDER BY created_at DESC`,
+        [smartCode]
+      );
+      
+      return result.rows.map((row: any) => ({
+        id: row.id,
+        smart: row.smart,
+        article: row.article,
+        qtyDelta: row.qty_delta,
+        reason: row.reason,
+        note: row.note,
+        purchasePrice: row.purchase_price,
+        salePrice: row.sale_price,
+        deliveryPrice: row.delivery_price,
+        boxNumber: row.box_number,
+        trackNumber: row.track_number,
+        shippingMethodId: row.shipping_method_id,
+        saleStatus: row.sale_status,
+        createdAt: row.created_at,
+      }));
+    } catch (error) {
+      console.error('Error getting sales by SMART:', error);
+      throw new Error('Failed to get sales');
     } finally {
       if (pool) {
         await pool.end();

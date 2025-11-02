@@ -200,6 +200,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get sales analytics by SMART code (MUST come before /api/stock/:smart/:article)
+  app.get("/api/stock/:smart/sales", async (req, res) => {
+    try {
+      const { smart } = req.params;
+      const [sales, purchases] = await Promise.all([
+        storage.getSalesBySmart(smart),
+        storage.getPurchasesBySmart(smart)
+      ]);
+      
+      // Calculate metrics for each sale
+      const salesWithMetrics = sales.map(sale => {
+        // Find closest previous purchase for this sale
+        // IMPORTANT: Match by article first, then by time to get correct purchase price
+        const closestPurchase = purchases
+          .filter(p => p.article === sale.article && new Date(p.createdAt) < new Date(sale.createdAt))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+        
+        const purchasePrice = parseFloat(closestPurchase?.purchasePrice || '0');
+        const salePrice = parseFloat(sale.salePrice || '0');
+        const deliveryPrice = parseFloat(sale.deliveryPrice || '0');
+        const quantity = Math.abs(sale.qtyDelta);
+        
+        // Calculate profit (sale price - purchase price - delivery) × quantity
+        const profit = (salePrice - purchasePrice - deliveryPrice) * quantity;
+        
+        // Calculate profit margin percentage for this sale
+        const profitMarginPercent = purchasePrice > 0 
+          ? ((salePrice - purchasePrice - deliveryPrice) / purchasePrice) * 100 
+          : 0;
+        
+        // Calculate days from purchase to sale
+        const daysFromPurchase = closestPurchase 
+          ? Math.round((new Date(sale.createdAt).getTime() - new Date(closestPurchase.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+          : null;
+        
+        return {
+          ...sale,
+          profit,
+          profitMarginPercent,
+          daysFromPurchase,
+          purchasePriceUsed: purchasePrice
+        };
+      });
+      
+      // Calculate summary metrics
+      const totalSold = salesWithMetrics.reduce((sum, sale) => sum + Math.abs(sale.qtyDelta), 0);
+      const totalPurchased = purchases.reduce((sum, purchase) => sum + purchase.qtyDelta, 0);
+      const sellThroughRate = totalPurchased > 0 ? (totalSold / totalPurchased) * 100 : 0;
+      
+      const salesWithDays = salesWithMetrics.filter(s => s.daysFromPurchase !== null);
+      const averageDaysToSell = salesWithDays.length > 0
+        ? salesWithDays.reduce((sum, sale) => sum + (sale.daysFromPurchase || 0), 0) / salesWithDays.length
+        : 0;
+      
+      const totalProfit = salesWithMetrics.reduce((sum, sale) => sum + sale.profit, 0);
+      const averageProfitPerUnit = totalSold > 0 ? totalProfit / totalSold : 0;
+      
+      // Calculate true profit margin: (total profit / total cost) × 100
+      // Total cost = sum of (purchase price × quantity) for all sales
+      const totalPurchaseCost = salesWithMetrics.reduce((sum, sale) => {
+        return sum + (sale.purchasePriceUsed * Math.abs(sale.qtyDelta));
+      }, 0);
+      
+      const averageProfitMarginPercent = totalPurchaseCost > 0
+        ? (totalProfit / totalPurchaseCost) * 100
+        : 0;
+      
+      res.json({
+        sales: salesWithMetrics,
+        metrics: {
+          averageDaysToSell: Math.round(averageDaysToSell * 10) / 10, // Round to 1 decimal
+          soldQuantity: totalSold,
+          totalPurchased,
+          sellThroughRate: Math.round(sellThroughRate * 10) / 10,
+          averageProfitPerUnit: Math.round(averageProfitPerUnit * 100) / 100, // Round to 2 decimals
+          averageProfitMarginPercent: Math.round(averageProfitMarginPercent * 10) / 10
+        }
+      });
+    } catch (error) {
+      console.error("Get sales analytics error:", error);
+      res.status(500).json({ error: "Failed to get sales analytics" });
+    }
+  });
+
   // Get stock by SMART and article
   app.get("/api/stock/:smart/:article", async (req, res) => {
     try {
