@@ -217,13 +217,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Update movement (purchase price and note)
+  // Update movement (purchase price, note, quantity, box number)
   app.patch("/api/movements/:id", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { purchasePrice, note } = req.body;
+      const { purchasePrice, note, qtyDelta, boxNumber } = req.body;
       
-      const updates: Partial<{purchasePrice: string | null; note: string | null}> = {};
+      const updates: Partial<{purchasePrice: string | null; note: string | null; qtyDelta: number; boxNumber: string | null}> = {};
       
       if (purchasePrice !== undefined) {
         updates.purchasePrice = purchasePrice;
@@ -231,6 +231,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (note !== undefined) {
         updates.note = note;
+      }
+      
+      if (qtyDelta !== undefined) {
+        if (!Number.isFinite(qtyDelta) || qtyDelta <= 0) {
+          return res.status(400).json({ error: "Quantity must be a positive number" });
+        }
+        updates.qtyDelta = qtyDelta;
+      }
+      
+      if (boxNumber !== undefined) {
+        updates.boxNumber = boxNumber;
       }
       
       const updatedMovement = await storage.updateMovement(id, updates);

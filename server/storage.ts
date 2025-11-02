@@ -45,7 +45,7 @@ export interface IStorage {
   getMovementById(id: number): Promise<Movement | undefined>;
   getMovementsBySmartAndArticle(smart: string, article: string): Promise<Movement[]>;
   getPurchasesBySmart(smart: string): Promise<Movement[]>;
-  updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note'>>): Promise<Movement>;
+  updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'>>): Promise<Movement>;
   updateMovementSaleStatus(id: number, status: 'awaiting_shipment' | 'shipped'): Promise<Movement>;
   
   // Stock operations
@@ -1005,7 +1005,7 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note'>>): Promise<Movement> {
+  async updateMovement(id: number, updates: Partial<Pick<Movement, 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'>>): Promise<Movement> {
     let pool: Pool | null = null;
     try {
       const activeConn = await this.getActiveConnection('inventory');
@@ -1039,6 +1039,16 @@ export class DatabaseStorage implements IStorage {
       if (updates.note !== undefined) {
         setClauses.push(`note = $${paramIndex++}`);
         values.push(updates.note);
+      }
+      
+      if (updates.qtyDelta !== undefined) {
+        setClauses.push(`qty_delta = $${paramIndex++}`);
+        values.push(updates.qtyDelta);
+      }
+      
+      if (updates.boxNumber !== undefined) {
+        setClauses.push(`box_number = $${paramIndex++}`);
+        values.push(updates.boxNumber);
       }
       
       if (setClauses.length === 0) {

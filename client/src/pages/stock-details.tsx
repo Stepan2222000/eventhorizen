@@ -15,7 +15,7 @@ import { format } from "date-fns";
 export default function StockDetails() {
   const { smart } = useParams();
   const { toast } = useToast();
-  const [editingCell, setEditingCell] = useState<{id: number, field: 'purchasePrice' | 'note'} | null>(null);
+  const [editingCell, setEditingCell] = useState<{id: number, field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'} | null>(null);
   const [editValue, setEditValue] = useState<string>("");
 
   const { data: purchasesData, isLoading } = useQuery<Movement[]>({
@@ -27,10 +27,18 @@ export default function StockDetails() {
   const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, field, value }: { id: number; field: 'purchasePrice' | 'note'; value: string | null }) => {
-      return await apiRequest('PATCH', `/api/movements/${id}`, {
-        [field]: value,
-      });
+    mutationFn: async ({ id, field, value }: { id: number; field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'; value: string | number | null }) => {
+      const payload: any = {};
+      if (field === 'qtyDelta') {
+        const numValue = parseInt(value as string);
+        if (!value || isNaN(numValue) || numValue <= 0) {
+          throw new Error('Количество должно быть положительным числом');
+        }
+        payload[field] = numValue;
+      } else {
+        payload[field] = value;
+      }
+      return await apiRequest('PATCH', `/api/movements/${id}`, payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
@@ -49,9 +57,9 @@ export default function StockDetails() {
     },
   });
 
-  const handleEditStart = (id: number, field: 'purchasePrice' | 'note', currentValue: string | null) => {
+  const handleEditStart = (id: number, field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber', currentValue: string | number | null) => {
     setEditingCell({ id, field });
-    setEditValue(currentValue || "");
+    setEditValue(currentValue?.toString() || "");
   };
 
   const handleEditCancel = () => {
@@ -219,18 +227,62 @@ export default function StockDetails() {
                           {format(new Date(purchase.createdAt), "dd.MM.yyyy")}
                         </TableCell>
                         <TableCell className="font-mono">{purchase.article}</TableCell>
-                        <TableCell className="text-right font-mono font-semibold">
-                          {Math.abs(purchase.qtyDelta)}
+                        <TableCell className="text-right">
+                          {editingCell?.id === purchase.id && editingCell.field === 'qtyDelta' ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <Input
+                                type="number"
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                className="w-20 border-2 border-primary font-mono text-right h-8"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleEditSave();
+                                  if (e.key === 'Escape') handleEditCancel();
+                                }}
+                                data-testid={`input-edit-qty-${purchase.id}`}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={handleEditSave}
+                                disabled={updateMutation.isPending}
+                                data-testid={`button-save-qty-${purchase.id}`}
+                              >
+                                <i className="fas fa-check text-green-500 text-xs"></i>
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={handleEditCancel}
+                                disabled={updateMutation.isPending}
+                                data-testid={`button-cancel-qty-${purchase.id}`}
+                              >
+                                <i className="fas fa-times text-red-500 text-xs"></i>
+                              </Button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleEditStart(purchase.id, 'qtyDelta', Math.abs(purchase.qtyDelta))}
+                              className="w-full text-right font-mono font-semibold hover:bg-muted px-2 py-1 rounded transition-colors group"
+                              data-testid={`button-edit-qty-${purchase.id}`}
+                            >
+                              <span>{Math.abs(purchase.qtyDelta)}</span>
+                              <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
+                            </button>
+                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           {editingCell?.id === purchase.id && editingCell.field === 'purchasePrice' ? (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center justify-end gap-1">
                               <Input
                                 type="number"
                                 step="0.01"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="border-2 border-primary font-mono text-right"
+                                className="w-28 border-2 border-primary font-mono text-right h-8"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleEditSave();
@@ -241,20 +293,22 @@ export default function StockDetails() {
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                className="h-8 w-8 p-0"
                                 onClick={handleEditSave}
                                 disabled={updateMutation.isPending}
                                 data-testid={`button-save-price-${purchase.id}`}
                               >
-                                <i className="fas fa-check text-green-500"></i>
+                                <i className="fas fa-check text-green-500 text-xs"></i>
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                className="h-8 w-8 p-0"
                                 onClick={handleEditCancel}
                                 disabled={updateMutation.isPending}
                                 data-testid={`button-cancel-price-${purchase.id}`}
                               >
-                                <i className="fas fa-times text-red-500"></i>
+                                <i className="fas fa-times text-red-500 text-xs"></i>
                               </Button>
                             </div>
                           ) : (
@@ -264,18 +318,18 @@ export default function StockDetails() {
                               data-testid={`button-edit-price-${purchase.id}`}
                             >
                               <span>{purchase.purchasePrice ? `${purchase.purchasePrice} ₽` : "—"}</span>
-                              <i className="fas fa-edit text-xs ml-2 opacity-0 group-hover:opacity-50 transition-opacity"></i>
+                              <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
                             </button>
                           )}
                         </TableCell>
                         <TableCell>
                           {editingCell?.id === purchase.id && editingCell.field === 'note' ? (
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
                               <Input
                                 type="text"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="border-2 border-primary"
+                                className="border-2 border-primary h-8"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleEditSave();
@@ -286,20 +340,22 @@ export default function StockDetails() {
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                className="h-8 w-8 p-0"
                                 onClick={handleEditSave}
                                 disabled={updateMutation.isPending}
                                 data-testid={`button-save-note-${purchase.id}`}
                               >
-                                <i className="fas fa-check text-green-500"></i>
+                                <i className="fas fa-check text-green-500 text-xs"></i>
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                className="h-8 w-8 p-0"
                                 onClick={handleEditCancel}
                                 disabled={updateMutation.isPending}
                                 data-testid={`button-cancel-note-${purchase.id}`}
                               >
-                                <i className="fas fa-times text-red-500"></i>
+                                <i className="fas fa-times text-red-500 text-xs"></i>
                               </Button>
                             </div>
                           ) : (
@@ -309,14 +365,58 @@ export default function StockDetails() {
                               data-testid={`button-edit-note-${purchase.id}`}
                             >
                               <span className="text-foreground">{purchase.note || "—"}</span>
-                              <i className="fas fa-edit text-xs ml-2 opacity-0 group-hover:opacity-50 transition-opacity"></i>
+                              <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
                             </button>
                           )}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="font-mono">
-                            {purchase.boxNumber || "—"}
-                          </Badge>
+                          {editingCell?.id === purchase.id && editingCell.field === 'boxNumber' ? (
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="text"
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                className="w-24 border-2 border-primary font-mono h-8"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleEditSave();
+                                  if (e.key === 'Escape') handleEditCancel();
+                                }}
+                                data-testid={`input-edit-box-${purchase.id}`}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={handleEditSave}
+                                disabled={updateMutation.isPending}
+                                data-testid={`button-save-box-${purchase.id}`}
+                              >
+                                <i className="fas fa-check text-green-500 text-xs"></i>
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                onClick={handleEditCancel}
+                                disabled={updateMutation.isPending}
+                                data-testid={`button-cancel-box-${purchase.id}`}
+                              >
+                                <i className="fas fa-times text-red-500 text-xs"></i>
+                              </Button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleEditStart(purchase.id, 'boxNumber', purchase.boxNumber)}
+                              className="hover:bg-muted px-2 py-1 rounded transition-colors group inline-flex items-center"
+                              data-testid={`button-edit-box-${purchase.id}`}
+                            >
+                              <Badge variant="outline" className="font-mono">
+                                {purchase.boxNumber || "—"}
+                              </Badge>
+                              <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
+                            </button>
+                          )}
                         </TableCell>
                         <TableCell className="text-right font-mono font-bold">
                           {getTotalPrice(purchase) ? `${getTotalPrice(purchase)} ₽` : "—"}
