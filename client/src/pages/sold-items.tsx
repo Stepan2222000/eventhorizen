@@ -37,10 +37,13 @@ export default function SoldItems() {
 
   const returnToInventoryMutation = useMutation({
     mutationFn: async (movementId: number) => {
+      console.log("Calling return API for movement:", movementId);
       const response = await apiRequest("POST", `/api/movements/${movementId}/return`, {});
+      console.log("Return API response received");
       return response.json();
     },
     onSuccess: () => {
+      console.log("Return mutation SUCCESS");
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       toast({
         title: "Товар возвращен",
@@ -48,9 +51,11 @@ export default function SoldItems() {
       });
     },
     onError: (error) => {
+      console.log("Return mutation ERROR:", error);
+      const message = error instanceof Error ? error.message : "Произошла ошибка";
       toast({
         title: "Ошибка возврата товара",
-        description: error instanceof Error ? error.message : "Произошла ошибка",
+        description: message,
         variant: "destructive",
       });
     },

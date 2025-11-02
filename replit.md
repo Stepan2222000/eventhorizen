@@ -14,6 +14,7 @@ This project is an internal inventory tracking system designed to link user-ente
 - **SMART Code Search Enhanced**: Search functionality now works for both SMART codes AND article codes (OR condition in SQL). Autocomplete displays SMART code first for better visibility.
 - **Runtime Errors Fixed**: Added null/length checks for `articles` array before calling `.join()` in autocomplete and disambiguation modal to prevent crashes when SMART-only results are returned.
 - **Button Colors Improved**: Quantity adjustment buttons changed from red/green to orange decrement (`text-orange-600`) and green increment (`text-green-600`) with outline variant for better UX.
+- **Duplicate Return Prevention**: Atomic transaction-level duplicate check prevents creating multiple return movements for the same sale. Check uses `note = 'Возврат продажи #<id>'` within SERIALIZABLE transaction. Server returns 409 Conflict with error message to frontend.
 
 ## User Preferences
 

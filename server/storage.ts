@@ -327,6 +327,21 @@ export class DatabaseStorage implements IStorage {
       await pool.query('BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       
       try {
+        // Check for duplicate return within transaction to prevent race conditions
+        if (movement.reason === 'return' && movement.note && movement.note.includes('Возврат продажи #')) {
+          const match = movement.note.match(/Возврат продажи #(\d+)/);
+          if (match) {
+            const saleId = match[1];
+            const duplicateCheck = await pool.query(
+              `SELECT id FROM inventory.movements WHERE reason = 'return' AND note = $1 LIMIT 1`,
+              [`Возврат продажи #${saleId}`]
+            );
+            if (duplicateCheck.rows.length > 0) {
+              throw new Error('Товар уже возвращен на склад');
+            }
+          }
+        }
+        
         // Get current stock for this article+smart combination
         const currentStock = await this.getCurrentStock(pool, movement.smart, movement.article);
         

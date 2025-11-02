@@ -325,6 +325,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
+      // Check for duplicate return error
+      if (error instanceof Error && error.message === 'Товар уже возвращен на склад') {
+        return res.status(409).json({ error: error.message });
+      }
+      
       res.status(500).json({ error: "Failed to return to inventory" });
     }
   });
