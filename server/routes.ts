@@ -100,6 +100,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/movements", async (req, res) => {
     try {
       const validatedData = insertMovementSchema.parse(req.body);
+      
+      // Validate quantity direction based on reason type
+      if ((validatedData.reason === 'purchase' || validatedData.reason === 'return') && validatedData.qtyDelta <= 0) {
+        return res.status(400).json({ error: "Для покупки/возврата количество должно быть положительным" });
+      }
+      if ((validatedData.reason === 'sale' || validatedData.reason === 'writeoff') && validatedData.qtyDelta >= 0) {
+        return res.status(400).json({ error: "Для продажи/списания количество должно быть отрицательным" });
+      }
+      
       const movement = await storage.createMovement(validatedData);
       res.status(201).json(movement);
     } catch (error) {

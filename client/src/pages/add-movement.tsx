@@ -24,6 +24,26 @@ const formSchema = insertMovementSchema.extend({
   qtyDelta: z.number().int().min(-999999).max(999999).refine((val) => val !== 0, {
     message: "Количество не может быть равно 0",
   }),
+}).superRefine((data, ctx) => {
+  // Validate quantity direction based on reason type
+  if (data.reason === 'purchase' || data.reason === 'return') {
+    if (data.qtyDelta <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Для покупки/возврата количество должно быть положительным",
+        path: ["qtyDelta"],
+      });
+    }
+  }
+  if (data.reason === 'sale' || data.reason === 'writeoff') {
+    if (data.qtyDelta >= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Для продажи/списания количество должно быть отрицательным",
+        path: ["qtyDelta"],
+      });
+    }
+  }
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -575,25 +595,36 @@ export default function AddMovement() {
                         <FormField
                           control={form.control}
                           name="salePrice"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Цена продажи <span className="text-destructive">*</span>
-                              </FormLabel>
-                              <FormControl>
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  {...field}
-                                  value={field.value || ""}
-                                  onChange={(e) => field.onChange(e.target.value || null)}
-                                  data-testid="input-sale-price"
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
+                          render={({ field }) => {
+                            const salePrice = parseFloat(field.value || "0");
+                            const totalAmount = Math.abs(qtyInput) * salePrice;
+                            
+                            return (
+                              <FormItem>
+                                <FormLabel>
+                                  Цена за единицу товара <span className="text-destructive">*</span>
+                                </FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    {...field}
+                                    value={field.value || ""}
+                                    onChange={(e) => field.onChange(e.target.value || null)}
+                                    data-testid="input-sale-price"
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                                {salePrice > 0 && qtyInput !== 0 && (
+                                  <p className="text-xs text-muted-foreground mt-1">
+                                    <i className="fas fa-calculator mr-1"></i>
+                                    Общая сумма: {totalAmount.toFixed(2)} ₽
+                                  </p>
+                                )}
+                              </FormItem>
+                            );
+                          }}
                         />
                         <FormField
                           control={form.control}
