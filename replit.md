@@ -12,6 +12,9 @@ This project is an internal inventory tracking system designed to link user-ente
 -   Prevention of negative stock through rigorous validation.
 -   Advanced analytics for sold-out items and top-performing parts based on profitability, sales volume, and a combined metric.
 
+### Recent Critical Fix (November 2025)
+**Array/String Field Handling:** Resolved recurring runtime errors caused by calling `.join()` on fields that could be strings instead of arrays. Applied comprehensive fix across all three files that display ArticleSearchResult data (add-movement.tsx, article-search.tsx, disambiguation-modal.tsx). Changed from conditional rendering with `Array.isArray()` check before the block to inline ternary operator `Array.isArray(field) ? field.join(', ') : field` within the rendering. This ensures robust handling regardless of whether backend returns arrays or strings for brand, articles, and description fields.
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.

@@ -171,24 +171,24 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    {Array.isArray(selectedResult.articles) && selectedResult.articles.length > 0 && (
+                    {selectedResult.articles && (
                       <div className="flex flex-col gap-1">
                         <span className="text-muted-foreground">Артикулы:</span>
                         <span className="font-mono font-medium break-words">
-                          {selectedResult.articles.join(', ')}
+                          {Array.isArray(selectedResult.articles) ? selectedResult.articles.join(', ') : selectedResult.articles}
                         </span>
                       </div>
                     )}
-                    {Array.isArray(selectedResult.brand) && selectedResult.brand.length > 0 && (
+                    {selectedResult.brand && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Бренд:</span>
-                        <span className="font-medium">{selectedResult.brand.join(', ')}</span>
+                        <span className="font-medium">{Array.isArray(selectedResult.brand) ? selectedResult.brand.join(', ') : selectedResult.brand}</span>
                       </div>
                     )}
-                    {Array.isArray(selectedResult.description) && selectedResult.description.length > 0 && (
+                    {selectedResult.description && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Описание:</span>
-                        <span className="font-medium">{selectedResult.description.join(', ')}</span>
+                        <span className="font-medium">{Array.isArray(selectedResult.description) ? selectedResult.description.join(', ') : selectedResult.description}</span>
                       </div>
                     )}
                     <div className="flex justify-between">

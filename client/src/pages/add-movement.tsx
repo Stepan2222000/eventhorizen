@@ -301,9 +301,14 @@ export default function AddMovement() {
 
   const handleAutocompleteSelect = (result: ArticleSearchResult) => {
     // Set article field: use articles if available, otherwise use SMART code
-    const articleValue = Array.isArray(result.articles) && result.articles.length > 0 
-      ? result.articles.join(', ') 
-      : result.smart;
+    let articleValue: string;
+    if (result.articles) {
+      articleValue = Array.isArray(result.articles) 
+        ? result.articles.join(', ') 
+        : result.articles;
+    } else {
+      articleValue = result.smart;
+    }
     
     form.setValue('article', articleValue);
     form.setValue('smart', result.smart);
@@ -399,15 +404,15 @@ export default function AddMovement() {
                                               <span className="font-mono text-sm font-bold text-primary">
                                                 {result.smart}
                                               </span>
-                                              {Array.isArray(result.brand) && result.brand.length > 0 && (
+                                              {result.brand && (
                                                 <span className="text-xs text-muted-foreground">
-                                                  {result.brand.join(', ')}
+                                                  {Array.isArray(result.brand) ? result.brand.join(', ') : result.brand}
                                                 </span>
                                               )}
                                             </div>
-                                            {Array.isArray(result.articles) && result.articles.length > 0 && (
+                                            {result.articles && (
                                               <span className="font-mono text-xs text-muted-foreground">
-                                                {result.articles.join(', ')}
+                                                {Array.isArray(result.articles) ? result.articles.join(', ') : result.articles}
                                               </span>
                                             )}
                                             {result.name && (
