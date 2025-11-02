@@ -62,11 +62,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const smartCodes = matches.map(m => m.smart);
       const stockMap = await storage.getTotalStockBySmartBatch(smartCodes);
       
+      // Normalize brand and description to always be arrays (or undefined)
+      // Database has these as text fields, but frontend expects arrays
+      const toArray = (value: any): string[] | undefined => {
+        if (!value) return undefined;
+        if (Array.isArray(value)) return value;
+        if (typeof value === 'string') return [value];
+        return undefined;
+      };
+      
       const results = matches.map(match => ({
         smart: match.smart,
-        articles: match.articles,
-        brand: match.brand,
-        description: match.description,
+        articles: Array.isArray(match.articles) ? match.articles : [],
+        brand: toArray(match.brand),
+        description: toArray(match.description),
         name: match.name,
         currentStock: stockMap.get(match.smart) || 0,
       }));

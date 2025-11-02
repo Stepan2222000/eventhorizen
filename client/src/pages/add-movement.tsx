@@ -286,7 +286,7 @@ export default function AddMovement() {
 
   const handleAutocompleteSelect = (result: ArticleSearchResult) => {
     // Set article field: use articles if available, otherwise use SMART code
-    const articleValue = result.articles && result.articles.length > 0 
+    const articleValue = Array.isArray(result.articles) && result.articles.length > 0 
       ? result.articles.join(', ') 
       : result.smart;
     
@@ -384,13 +384,13 @@ export default function AddMovement() {
                                               <span className="font-mono text-sm font-bold text-primary">
                                                 {result.smart}
                                               </span>
-                                              {result.brand && result.brand.length > 0 && (
+                                              {Array.isArray(result.brand) && result.brand.length > 0 && (
                                                 <span className="text-xs text-muted-foreground">
                                                   {result.brand.join(', ')}
                                                 </span>
                                               )}
                                             </div>
-                                            {result.articles && result.articles.length > 0 && (
+                                            {Array.isArray(result.articles) && result.articles.length > 0 && (
                                               <span className="font-mono text-xs text-muted-foreground">
                                                 {result.articles.join(', ')}
                                               </span>

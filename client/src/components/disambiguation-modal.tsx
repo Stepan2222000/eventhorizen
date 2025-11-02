@@ -41,19 +41,19 @@ export function DisambiguationModal({
             >
               <div className="flex items-start justify-between mb-1">
                 <div className="font-mono font-semibold text-base text-foreground">{match.smart}</div>
-                {match.brand && match.brand.length > 0 && (
+                {Array.isArray(match.brand) && match.brand.length > 0 && (
                   <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
                     {match.brand.join(', ')}
                   </span>
                 )}
               </div>
-              {match.articles && match.articles.length > 0 && (
+              {Array.isArray(match.articles) && match.articles.length > 0 && (
                 <div className="text-xs text-muted-foreground mb-1">
                   <span className="font-semibold">Артикулы: </span>
                   <span className="font-mono">{match.articles.join(', ')}</span>
                 </div>
               )}
-              {match.description && match.description.length > 0 && (
+              {Array.isArray(match.description) && match.description.length > 0 && (
                 <div className="text-xs text-foreground mb-1">
                   <span className="font-semibold">Описание: </span>
                   {match.description.join(', ')}

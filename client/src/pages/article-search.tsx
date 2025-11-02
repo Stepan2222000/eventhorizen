@@ -171,19 +171,21 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-muted-foreground">Артикулы:</span>
-                      <span className="font-mono font-medium break-words">
-                        {selectedResult.articles.join(', ')}
-                      </span>
-                    </div>
-                    {selectedResult.brand && selectedResult.brand.length > 0 && (
+                    {Array.isArray(selectedResult.articles) && selectedResult.articles.length > 0 && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-muted-foreground">Артикулы:</span>
+                        <span className="font-mono font-medium break-words">
+                          {selectedResult.articles.join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {Array.isArray(selectedResult.brand) && selectedResult.brand.length > 0 && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Бренд:</span>
                         <span className="font-medium">{selectedResult.brand.join(', ')}</span>
                       </div>
                     )}
-                    {selectedResult.description && selectedResult.description.length > 0 && (
+                    {Array.isArray(selectedResult.description) && selectedResult.description.length > 0 && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Описание:</span>
                         <span className="font-medium">{selectedResult.description.join(', ')}</span>
@@ -199,9 +201,12 @@ export default function ArticleSearch() {
                       className="flex-1" 
                       data-testid="button-add-movement"
                       onClick={() => {
+                        const articleValue = Array.isArray(selectedResult.articles) && selectedResult.articles.length > 0
+                          ? selectedResult.articles.join(', ')
+                          : selectedResult.smart;
                         const params = new URLSearchParams({
                           smart: selectedResult.smart,
-                          article: selectedResult.articles.join(', ')
+                          article: articleValue
                         });
                         setLocation(`/movement?${params.toString()}`);
                       }}
