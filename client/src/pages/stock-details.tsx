@@ -221,9 +221,9 @@ export default function StockDetails() {
               </div>
             ) : (
               <>
-                <div className="relative max-h-[500px] overflow-auto border rounded-md">
+                <div className="relative max-h-[300px] overflow-auto border rounded-md">
                   <table className="w-full caption-bottom text-sm">
-                    <thead className="[&_tr]:border-b bg-muted">
+                    <thead className="[&_tr]:border-b bg-muted/50">
                       <tr className="border-b transition-colors">
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[120px]">Дата</th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[180px]">Артикул</th>
@@ -238,14 +238,14 @@ export default function StockDetails() {
                       {purchases.map((purchase) => (
                         <tr 
                           key={purchase.id} 
-                          className="hover:bg-muted/50 transition-colors"
+                          className="hover:bg-muted/50 transition-colors border-b"
                           data-testid={`row-purchase-${purchase.id}`}
                         >
-                          <td className="font-mono text-sm whitespace-nowrap">
+                          <td className="p-4 align-middle font-mono text-sm whitespace-nowrap">
                             {format(new Date(purchase.createdAt), "dd.MM.yyyy")}
                           </td>
-                          <td className="font-mono whitespace-nowrap">{purchase.article}</td>
-                          <td className="text-right">
+                          <td className="p-4 align-middle font-mono whitespace-nowrap">{purchase.article}</td>
+                          <td className="p-4 align-middle text-right">
                             {editingCell?.id === purchase.id && editingCell.field === 'qtyDelta' ? (
                               <div className="flex items-center justify-end gap-1">
                                 <Input
@@ -292,7 +292,7 @@ export default function StockDetails() {
                               </button>
                             )}
                           </td>
-                          <td className="text-right">
+                          <td className="p-4 align-middle text-right">
                             {editingCell?.id === purchase.id && editingCell.field === 'purchasePrice' ? (
                               <div className="flex items-center justify-end gap-1">
                                 <Input
@@ -340,7 +340,7 @@ export default function StockDetails() {
                               </button>
                             )}
                           </td>
-                          <td>
+                          <td className="p-4 align-middle">
                             {editingCell?.id === purchase.id && editingCell.field === 'note' ? (
                               <div className="flex items-start gap-1">
                                 <Textarea
@@ -388,7 +388,7 @@ export default function StockDetails() {
                               </button>
                             )}
                           </td>
-                          <td className="whitespace-nowrap">
+                          <td className="p-4 align-middle whitespace-nowrap">
                             {editingCell?.id === purchase.id && editingCell.field === 'boxNumber' ? (
                               <div className="flex items-center gap-1">
                                 <Input
@@ -437,7 +437,7 @@ export default function StockDetails() {
                               </button>
                             )}
                           </td>
-                          <td className="text-right font-mono font-bold whitespace-nowrap">
+                          <td className="p-4 align-middle text-right font-mono font-bold whitespace-nowrap">
                             {getTotalPrice(purchase) ? `${getTotalPrice(purchase)} ₽` : "—"}
                           </td>
                         </tr>
@@ -514,7 +514,7 @@ export default function StockDetails() {
                 </div>
 
                 {/* Sales Table */}
-                <div className="relative max-h-[500px] overflow-auto border rounded-md">
+                <div className="relative max-h-[300px] overflow-auto border rounded-md">
                   <table className="w-full caption-bottom text-sm">
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
