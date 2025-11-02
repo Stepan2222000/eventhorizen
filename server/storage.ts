@@ -17,7 +17,9 @@ import type {
   ConfigureConnectionPayload,
   ConnectionRole,
   ShippingMethod,
-  InsertShippingMethod
+  InsertShippingMethod,
+  SoldOutItem,
+  TopPart
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import { Pool } from "pg";
@@ -54,6 +56,10 @@ export interface IStorage {
   getStockBySmartAndArticle(smart: string, article: string): Promise<StockLevel | undefined>;
   getTotalStockBySmart(smart: string): Promise<number>;
   getTotalStockBySmartBatch(smartCodes: string[]): Promise<Map<string, number>>;
+  
+  // Analytics operations
+  getSoldOutItems(): Promise<SoldOutItem[]>;
+  getTopParts(mode: 'profit' | 'sales' | 'combined'): Promise<TopPart[]>;
   
   // Reasons
   getReasons(): Promise<Reason[]>;
@@ -1057,6 +1063,285 @@ export class DatabaseStorage implements IStorage {
     } finally {
       if (pool) {
         await pool.end();
+      }
+    }
+  }
+
+  async getSoldOutItems(): Promise<SoldOutItem[]> {
+    let pool: Pool | null = null;
+    let smartPool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      // Get items with zero stock but had sales
+      const result = await pool.query(`
+        WITH stock_summary AS (
+          SELECT 
+            smart,
+            SUM(qty_delta) as current_stock
+          FROM inventory.movements
+          GROUP BY smart
+          HAVING SUM(qty_delta) = 0
+        ),
+        sales_summary AS (
+          SELECT 
+            m.smart,
+            AVG(CAST(m.sale_price AS NUMERIC)) as avg_sale_price,
+            MAX(m.created_at) as last_sale_date,
+            COUNT(*) as total_sales
+          FROM inventory.movements m
+          WHERE m.reason = 'sale'
+          GROUP BY m.smart
+        )
+        SELECT 
+          ss.smart,
+          COALESCE(sal.avg_sale_price, 0) as avg_sale_price,
+          sal.last_sale_date,
+          COALESCE(sal.total_sales, 0) as total_sales
+        FROM stock_summary ss
+        INNER JOIN sales_summary sal ON ss.smart = sal.smart
+        ORDER BY sal.last_sale_date DESC
+      `);
+      
+      // Get SMART names from external DB
+      const smartConn = await this.getActiveConnection('smart');
+      if (smartConn) {
+        const smartFullConnections = await inventoryDb
+          .select()
+          .from(dbConnections)
+          .where(eq(dbConnections.id, smartConn.id))
+          .limit(1);
+        
+        if (smartFullConnections.length) {
+          const smartConnData = smartFullConnections[0];
+          smartPool = this.createExternalPool(smartConnData);
+          const fieldMapping = (smartConnData.fieldMapping as any) || {};
+          const smartField = fieldMapping.smart || 'smart';
+          const nameField = fieldMapping.name || 'name';
+          const tableName = smartConnData.tableName || 'smart';
+          
+          const smartCodes = result.rows.map((r: any) => r.smart);
+          if (smartCodes.length > 0) {
+            const namesResult = await smartPool.query(
+              `SELECT ${smartField} as smart, ${nameField} as name 
+               FROM ${tableName} 
+               WHERE ${smartField} = ANY($1)`,
+              [smartCodes]
+            );
+            
+            const namesMap = new Map(namesResult.rows.map((r: any) => [r.smart, r.name]));
+            
+            return result.rows.map((row: any) => ({
+              smart: row.smart,
+              name: namesMap.get(row.smart),
+              avgSalePrice: parseFloat(row.avg_sale_price),
+              lastSaleDate: row.last_sale_date,
+              totalSales: parseInt(row.total_sales),
+            }));
+          }
+        }
+      }
+      
+      return result.rows.map((row: any) => ({
+        smart: row.smart,
+        name: undefined,
+        avgSalePrice: parseFloat(row.avg_sale_price),
+        lastSaleDate: row.last_sale_date,
+        totalSales: parseInt(row.total_sales),
+      }));
+    } catch (error) {
+      console.error('Error getting sold out items:', error);
+      throw new Error('Failed to get sold out items');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+      if (smartPool) {
+        await smartPool.end();
+      }
+    }
+  }
+
+  async getTopParts(mode: 'profit' | 'sales' | 'combined'): Promise<TopPart[]> {
+    let pool: Pool | null = null;
+    let smartPool: Pool | null = null;
+    try {
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return [];
+      }
+      
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return [];
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      // Calculate top parts with different metrics
+      const result = await pool.query(`
+        WITH sales_data AS (
+          SELECT 
+            m.smart,
+            m.article,
+            SUM(ABS(m.qty_delta)) as total_sales_qty,
+            AVG(CAST(m.sale_price AS NUMERIC)) as avg_sale_price,
+            AVG(CAST(m.delivery_price AS NUMERIC)) as avg_delivery_price
+          FROM inventory.movements m
+          WHERE m.reason = 'sale'
+          GROUP BY m.smart, m.article
+        ),
+        purchase_data AS (
+          SELECT 
+            m.smart,
+            m.article,
+            m.created_at as purchase_date,
+            CAST(m.purchase_price AS NUMERIC) as purchase_price,
+            m.qty_delta as purchase_qty
+          FROM inventory.movements m
+          WHERE m.reason = 'purchase'
+        ),
+        profit_calc AS (
+          SELECT 
+            s.smart,
+            s.total_sales_qty,
+            s.avg_sale_price,
+            (
+              SELECT AVG(p.purchase_price)
+              FROM purchase_data p
+              WHERE p.smart = s.smart AND p.article = s.article
+              ORDER BY p.purchase_date DESC
+              LIMIT 10
+            ) as avg_purchase_price,
+            COALESCE(s.avg_delivery_price, 0) as avg_delivery_price
+          FROM sales_data s
+        ),
+        stock_calc AS (
+          SELECT 
+            smart,
+            SUM(qty_delta) as current_stock
+          FROM inventory.movements
+          GROUP BY smart
+        )
+        SELECT 
+          p.smart,
+          COALESCE(p.avg_sale_price - p.avg_purchase_price - p.avg_delivery_price, 0) as avg_profit,
+          COALESCE(p.total_sales_qty, 0) as total_sales,
+          CASE 
+            WHEN p.avg_purchase_price > 0 THEN 
+              ((p.avg_sale_price - p.avg_purchase_price - p.avg_delivery_price) / p.avg_purchase_price * 100)
+            ELSE 0
+          END as profit_margin,
+          COALESCE(s.current_stock, 0) as current_stock
+        FROM profit_calc p
+        LEFT JOIN stock_calc s ON p.smart = s.smart
+        WHERE p.avg_purchase_price IS NOT NULL
+      `);
+      
+      // Calculate combined score for each item
+      const items = result.rows.map((row: any) => {
+        const avgProfit = parseFloat(row.avg_profit);
+        const totalSales = parseInt(row.total_sales);
+        const profitMargin = parseFloat(row.profit_margin);
+        const currentStock = parseInt(row.current_stock);
+        
+        // Weighted formula: (sales × 0.5) + (profit × 0.5)
+        // Normalize sales (max 100) and profit (max 1000) for fair weighting
+        const normalizedSales = Math.min(totalSales / 10, 100);
+        const normalizedProfit = Math.min(avgProfit / 10, 100);
+        const combinedScore = (normalizedSales * 0.5) + (normalizedProfit * 0.5);
+        
+        return {
+          smart: row.smart,
+          name: undefined,
+          avgProfit,
+          totalSales,
+          profitMargin,
+          currentStock,
+          combinedScore,
+        };
+      });
+      
+      // Sort based on mode
+      let sortedItems: any[];
+      if (mode === 'profit') {
+        sortedItems = items.sort((a, b) => b.avgProfit - a.avgProfit);
+      } else if (mode === 'sales') {
+        sortedItems = items.sort((a, b) => b.totalSales - a.totalSales);
+      } else {
+        sortedItems = items.sort((a, b) => b.combinedScore! - a.combinedScore!);
+      }
+      
+      // Get SMART names from external DB
+      const smartConn = await this.getActiveConnection('smart');
+      if (smartConn) {
+        const smartFullConnections = await inventoryDb
+          .select()
+          .from(dbConnections)
+          .where(eq(dbConnections.id, smartConn.id))
+          .limit(1);
+        
+        if (smartFullConnections.length) {
+          const smartConnData = smartFullConnections[0];
+          smartPool = this.createExternalPool(smartConnData);
+          const fieldMapping = (smartConnData.fieldMapping as any) || {};
+          const smartField = fieldMapping.smart || 'smart';
+          const nameField = fieldMapping.name || 'name';
+          const tableName = smartConnData.tableName || 'smart';
+          
+          const smartCodes = sortedItems.map((item) => item.smart);
+          if (smartCodes.length > 0) {
+            const namesResult = await smartPool.query(
+              `SELECT ${smartField} as smart, ${nameField} as name 
+               FROM ${tableName} 
+               WHERE ${smartField} = ANY($1)`,
+              [smartCodes]
+            );
+            
+            const namesMap = new Map(namesResult.rows.map((r: any) => [r.smart, r.name]));
+            
+            return sortedItems.map((item) => ({
+              ...item,
+              name: namesMap.get(item.smart),
+            }));
+          }
+        }
+      }
+      
+      return sortedItems;
+    } catch (error) {
+      console.error('Error getting top parts:', error);
+      throw new Error('Failed to get top parts');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+      if (smartPool) {
+        await smartPool.end();
       }
     }
   }

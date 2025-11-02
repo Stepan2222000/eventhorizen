@@ -216,3 +216,23 @@ export type ConfigureConnectionResponse = {
 export type DbColumnsResult = {
   columns: string[];
 };
+
+// Sold out items (zero stock but had sales)
+export type SoldOutItem = {
+  smart: string;
+  name?: string;
+  avgSalePrice: number;
+  lastSaleDate: string;
+  totalSales: number;
+};
+
+// Top parts ranking
+export type TopPart = {
+  smart: string;
+  name?: string;
+  avgProfit: number;
+  totalSales: number;
+  profitMargin: number;
+  currentStock: number;
+  combinedScore?: number;
+};

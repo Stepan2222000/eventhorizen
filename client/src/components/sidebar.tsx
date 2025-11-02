@@ -8,6 +8,8 @@ const navigation = [
   { name: 'Остатки', href: '/stock', icon: 'fas fa-warehouse' },
   { name: 'История движений', href: '/history', icon: 'fas fa-clock-rotate-left' },
   { name: 'Проданные товары', href: '/sold', icon: 'fas fa-shopping-cart' },
+  { name: 'Распроданные товары', href: '/sold-out', icon: 'fas fa-box-open' },
+  { name: 'Топ запчастей', href: '/top-parts', icon: 'fas fa-trophy' },
   { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
   { name: 'Подключения БД', href: '/db-connections', icon: 'fas fa-database' },
 ];

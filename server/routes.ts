@@ -427,6 +427,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get sold out items (zero stock but had sales)
+  app.get("/api/sold-out", async (req, res) => {
+    try {
+      const items = await storage.getSoldOutItems();
+      res.json(items);
+    } catch (error) {
+      console.error("Get sold out items error:", error);
+      res.status(500).json({ error: "Failed to get sold out items" });
+    }
+  });
+
+  // Get top parts ranking
+  app.get("/api/top-parts", async (req, res) => {
+    try {
+      const mode = req.query.mode as 'profit' | 'sales' | 'combined';
+      if (!mode || !['profit', 'sales', 'combined'].includes(mode)) {
+        return res.status(400).json({ error: "Invalid mode. Must be 'profit', 'sales', or 'combined'" });
+      }
+      
+      const items = await storage.getTopParts(mode);
+      res.json(items);
+    } catch (error) {
+      console.error("Get top parts error:", error);
+      res.status(500).json({ error: "Failed to get top parts" });
+    }
+  });
+
   // Return sold item to inventory
   app.post("/api/movements/:id/return", async (req, res) => {
     try {
