@@ -85,7 +85,7 @@ export default function StockDetails() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-gray-950">
+    <div className="flex-1 overflow-y-auto bg-background">
       <header className="bg-card border-b border-border sticky top-0 z-10">
         <div className="px-8 py-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
@@ -105,12 +105,12 @@ export default function StockDetails() {
       </header>
 
       <div className="p-8 max-w-7xl mx-auto">
-        <Card className="bg-gray-900 border-gray-800 mb-6">
+        <Card className="bg-card border-border mb-6">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-gray-400 mb-1">SMART КОД</p>
-                <h3 className="text-3xl font-mono font-bold text-white">{smart}</h3>
+                <p className="text-xs text-muted-foreground mb-1">SMART КОД</p>
+                <h3 className="text-3xl font-mono font-bold text-foreground">{smart}</h3>
               </div>
               <Button
                 variant="ghost"
@@ -132,18 +132,18 @@ export default function StockDetails() {
             <CardContent>
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <p className="text-xs text-gray-400 mb-1">Всего покупок</p>
-                  <p className="text-2xl font-semibold text-white">{purchases.length}</p>
+                  <p className="text-xs text-muted-foreground mb-1">Всего покупок</p>
+                  <p className="text-2xl font-semibold text-foreground">{purchases.length}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-400 mb-1">Общее количество</p>
-                  <p className="text-2xl font-semibold text-white">
+                  <p className="text-xs text-muted-foreground mb-1">Общее количество</p>
+                  <p className="text-2xl font-semibold text-foreground">
                     {purchases.reduce((sum, p) => sum + Math.abs(p.qtyDelta), 0)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-400 mb-1">Средняя цена</p>
-                  <p className="text-2xl font-semibold text-white">
+                  <p className="text-xs text-muted-foreground mb-1">Средняя цена</p>
+                  <p className="text-2xl font-semibold text-foreground">
                     {purchases.filter(p => p.purchasePrice).length > 0
                       ? (purchases
                           .filter(p => p.purchasePrice)
@@ -153,8 +153,8 @@ export default function StockDetails() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-400 mb-1">Всего затрат</p>
-                  <p className="text-2xl font-semibold text-white">
+                  <p className="text-xs text-muted-foreground mb-1">Всего затрат</p>
+                  <p className="text-2xl font-semibold text-foreground">
                     {purchases
                       .filter(p => p.purchasePrice)
                       .reduce((sum, p) => {
@@ -170,7 +170,7 @@ export default function StockDetails() {
           )}
         </Card>
 
-        <Card className="bg-gray-900 border-gray-800">
+        <Card className="bg-card border-border">
           <CardHeader>
             <CardTitle>История покупок</CardTitle>
           </CardHeader>
@@ -178,15 +178,15 @@ export default function StockDetails() {
             {isLoading ? (
               <div className="space-y-3">
                 {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full bg-gray-800" />
+                  <Skeleton key={i} className="h-12 w-full" />
                 ))}
               </div>
             ) : !purchases || purchases.length === 0 ? (
               <div className="text-center py-12">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-800 mb-4">
-                  <i className="fas fa-box-open text-2xl text-gray-500"></i>
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-muted mb-4">
+                  <i className="fas fa-box-open text-2xl text-muted-foreground"></i>
                 </div>
-                <p className="text-gray-400 mb-4">Нет записей о покупках</p>
+                <p className="text-muted-foreground mb-4">Нет записей о покупках</p>
                 <Link href="/movement">
                   <Button data-testid="button-add-first-purchase">
                     <i className="fas fa-plus mr-2"></i>
@@ -197,7 +197,7 @@ export default function StockDetails() {
             ) : (
               <div className="overflow-x-auto">
                 <Table>
-                  <TableHeader className="bg-gray-800">
+                  <TableHeader className="bg-muted">
                     <TableRow>
                       <TableHead className="w-[120px]">Дата</TableHead>
                       <TableHead className="w-[180px]">Артикул</TableHead>
@@ -212,7 +212,7 @@ export default function StockDetails() {
                     {purchases.map((purchase) => (
                       <TableRow 
                         key={purchase.id} 
-                        className="hover:bg-gray-800/50 transition-colors border-b border-gray-800"
+                        className="hover:bg-muted/50 transition-colors"
                         data-testid={`row-purchase-${purchase.id}`}
                       >
                         <TableCell className="font-mono text-sm">
@@ -230,7 +230,7 @@ export default function StockDetails() {
                                 step="0.01"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="bg-gray-800 border-2 border-blue-500 font-mono text-right"
+                                className="border-2 border-primary font-mono text-right"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleEditSave();
@@ -260,7 +260,7 @@ export default function StockDetails() {
                           ) : (
                             <button
                               onClick={() => handleEditStart(purchase.id, 'purchasePrice', purchase.purchasePrice)}
-                              className="w-full text-right font-mono hover:bg-gray-800 px-2 py-1 rounded transition-colors group"
+                              className="w-full text-right font-mono hover:bg-muted px-2 py-1 rounded transition-colors group"
                               data-testid={`button-edit-price-${purchase.id}`}
                             >
                               <span>{purchase.purchasePrice ? `${purchase.purchasePrice} ₽` : "—"}</span>
@@ -275,7 +275,7 @@ export default function StockDetails() {
                                 type="text"
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="bg-gray-800 border-2 border-blue-500"
+                                className="border-2 border-primary"
                                 autoFocus
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') handleEditSave();
@@ -305,10 +305,10 @@ export default function StockDetails() {
                           ) : (
                             <button
                               onClick={() => handleEditStart(purchase.id, 'note', purchase.note)}
-                              className="w-full text-left hover:bg-gray-800 px-2 py-1 rounded transition-colors group"
+                              className="w-full text-left hover:bg-muted px-2 py-1 rounded transition-colors group"
                               data-testid={`button-edit-note-${purchase.id}`}
                             >
-                              <span className="text-gray-300">{purchase.note || "—"}</span>
+                              <span className="text-foreground">{purchase.note || "—"}</span>
                               <i className="fas fa-edit text-xs ml-2 opacity-0 group-hover:opacity-50 transition-opacity"></i>
                             </button>
                           )}
@@ -326,7 +326,7 @@ export default function StockDetails() {
                   </TableBody>
                 </Table>
                 
-                <div className="mt-4 text-sm text-gray-400">
+                <div className="mt-4 text-sm text-muted-foreground">
                   Показано {purchases.length} {purchases.length === 1 ? 'запись' : purchases.length < 5 ? 'записи' : 'записей'}
                 </div>
               </div>
