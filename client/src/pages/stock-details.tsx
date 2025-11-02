@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -324,39 +325,40 @@ export default function StockDetails() {
                         </TableCell>
                         <TableCell>
                           {editingCell?.id === purchase.id && editingCell.field === 'note' ? (
-                            <div className="flex items-center gap-1">
-                              <Input
-                                type="text"
+                            <div className="flex items-start gap-1">
+                              <Textarea
                                 value={editValue}
                                 onChange={(e) => setEditValue(e.target.value)}
-                                className="border-2 border-primary h-8"
+                                className="border-2 border-primary min-h-[80px] resize-y"
                                 autoFocus
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleEditSave();
+                                  if (e.key === 'Enter' && e.ctrlKey) handleEditSave();
                                   if (e.key === 'Escape') handleEditCancel();
                                 }}
                                 data-testid={`input-edit-note-${purchase.id}`}
                               />
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                onClick={handleEditSave}
-                                disabled={updateMutation.isPending}
-                                data-testid={`button-save-note-${purchase.id}`}
-                              >
-                                <i className="fas fa-check text-green-500 text-xs"></i>
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                onClick={handleEditCancel}
-                                disabled={updateMutation.isPending}
-                                data-testid={`button-cancel-note-${purchase.id}`}
-                              >
-                                <i className="fas fa-times text-red-500 text-xs"></i>
-                              </Button>
+                              <div className="flex flex-col gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  onClick={handleEditSave}
+                                  disabled={updateMutation.isPending}
+                                  data-testid={`button-save-note-${purchase.id}`}
+                                >
+                                  <i className="fas fa-check text-green-500 text-xs"></i>
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  onClick={handleEditCancel}
+                                  disabled={updateMutation.isPending}
+                                  data-testid={`button-cancel-note-${purchase.id}`}
+                                >
+                                  <i className="fas fa-times text-red-500 text-xs"></i>
+                                </Button>
+                              </div>
                             </div>
                           ) : (
                             <button
@@ -364,7 +366,7 @@ export default function StockDetails() {
                               className="w-full text-left hover:bg-muted px-2 py-1 rounded transition-colors group"
                               data-testid={`button-edit-note-${purchase.id}`}
                             >
-                              <span className="text-foreground">{purchase.note || "—"}</span>
+                              <span className="text-foreground whitespace-pre-wrap">{purchase.note || "—"}</span>
                               <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
                             </button>
                           )}

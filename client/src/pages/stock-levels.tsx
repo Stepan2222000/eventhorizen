@@ -140,14 +140,16 @@ export default function StockLevels() {
                                   <i className="fas fa-eye text-xs"></i>
                                 </Button>
                               </Link>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 w-8 p-0"
-                                data-testid={`button-add-movement-${item.smart}`}
-                              >
-                                <i className="fas fa-plus text-xs"></i>
-                              </Button>
+                              <Link href={`/movement?smart=${encodeURIComponent(item.smart)}`}>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0"
+                                  data-testid={`button-add-movement-${item.smart}`}
+                                >
+                                  <i className="fas fa-plus text-xs"></i>
+                                </Button>
+                              </Link>
                             </div>
                           </TableCell>
                         </TableRow>
