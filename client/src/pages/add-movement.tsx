@@ -26,11 +26,12 @@ const formSchema = insertMovementSchema.extend({
   }),
 }).superRefine((data, ctx) => {
   // Validate quantity direction based on reason type
-  if (data.reason === 'purchase' || data.reason === 'return') {
+  // Note: 'return' is not shown in form (only via sold items), but validation kept for safety
+  if (data.reason === 'purchase') {
     if (data.qtyDelta <= 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Для покупки/возврата количество должно быть положительным",
+        message: "Для покупки количество должно быть положительным",
         path: ["qtyDelta"],
       });
     }
@@ -159,8 +160,18 @@ export default function AddMovement() {
     queryKey: ["/api/shipping-methods"],
   });
 
+  // Filter out 'return' reason - returns should only be done via sold items page
+  const availableReasons = (reasons as Reason[] || []).filter(r => r.code !== 'return');
+
   // Watch the reason field to show conditional fields
   const selectedReason = form.watch("reason");
+
+  // Trigger validation when reason changes to validate quantity direction
+  useEffect(() => {
+    if (selectedReason) {
+      form.trigger("qtyDelta");
+    }
+  }, [selectedReason, form]);
 
   const searchArticleMutation = useMutation({
     mutationFn: async (query: string) => {
@@ -250,13 +261,17 @@ export default function AddMovement() {
   };
 
   const incrementQty = () => {
-    setQtyInput(prev => prev + 1);
-    form.setValue('qtyDelta', qtyInput + 1);
+    const newValue = qtyInput + 1;
+    setQtyInput(newValue);
+    form.setValue('qtyDelta', newValue);
+    form.trigger('qtyDelta');
   };
 
   const decrementQty = () => {
-    setQtyInput(prev => prev - 1);
-    form.setValue('qtyDelta', qtyInput - 1);
+    const newValue = qtyInput - 1;
+    setQtyInput(newValue);
+    form.setValue('qtyDelta', newValue);
+    form.trigger('qtyDelta');
   };
 
   const handleArticleSearch = () => {
@@ -492,6 +507,7 @@ export default function AddMovement() {
                                   const val = parseInt(e.target.value) || 0;
                                   setQtyInput(val);
                                   field.onChange(val);
+                                  form.trigger('qtyDelta');
                                 }}
                                 data-testid="input-qty-delta"
                               />
@@ -527,7 +543,7 @@ export default function AddMovement() {
                               </SelectTrigger>
                             </FormControl>
                             <SelectContent>
-                              {(reasons as Reason[] || []).map((reason) => (
+                              {availableReasons.map((reason) => (
                                 <SelectItem key={reason.code} value={reason.code}>
                                   {reason.title}
                                 </SelectItem>

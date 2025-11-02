@@ -110,8 +110,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = insertMovementSchema.parse(req.body);
       
       // Validate quantity direction based on reason type
-      if ((validatedData.reason === 'purchase' || validatedData.reason === 'return') && validatedData.qtyDelta <= 0) {
-        return res.status(400).json({ error: "Для покупки/возврата количество должно быть положительным" });
+      // Note: 'return' movements are created automatically via sold items page, not this endpoint
+      if (validatedData.reason === 'purchase' && validatedData.qtyDelta <= 0) {
+        return res.status(400).json({ error: "Для покупки количество должно быть положительным" });
+      }
+      if (validatedData.reason === 'return' && validatedData.qtyDelta <= 0) {
+        return res.status(400).json({ error: "Для возврата количество должно быть положительным" });
       }
       if ((validatedData.reason === 'sale' || validatedData.reason === 'writeoff') && validatedData.qtyDelta >= 0) {
         return res.status(400).json({ error: "Для продажи/списания количество должно быть отрицательным" });
