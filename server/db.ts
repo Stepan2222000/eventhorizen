@@ -90,6 +90,7 @@ export async function initializeInventoryDb() {
         SUM(qty_delta) as total_qty
       FROM inventory.movements
       GROUP BY smart
+      HAVING SUM(qty_delta) > 0
     `);
     
     console.log('Inventory database initialized successfully');
@@ -202,6 +203,7 @@ export async function ensureExternalDbSchema(connectionDetails: any) {
         SUM(qty_delta) as total_qty
       FROM inventory.movements
       GROUP BY smart
+      HAVING SUM(qty_delta) > 0
     `);
     
     console.log('External database schema updated successfully');
