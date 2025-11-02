@@ -18,6 +18,8 @@ This project is an internal inventory tracking system designed to link user-ente
 - **Duplicate Return Prevention**: Atomic transaction-level duplicate check prevents creating multiple return movements for the same sale. Check uses exact equality `note = 'Возврат продажи #<id>'` within SERIALIZABLE transaction. Server returns 409 Conflict with error message to frontend.
 - **Sale Price Clarification**: Label changed from "Цена продажи" to "Цена за единицу товара" with automatic total calculation display showing "Общая сумма: X ₽" (using |quantity| × price).
 - **Quantity Direction Validation**: Added frontend and backend validation to enforce correct quantity signs: Purchase/Return must be positive (+), Sale/Writeoff must be negative (-). Clear error messages prevent logical errors in inventory operations.
+- **Return Option Removed from Add Movement Form**: Removed "Возврат" from the reasons dropdown on Add Movement page. Returns are now created exclusively via "Вернуть на склад" button on Sold Items page, enforcing proper business logic that ties each return to its specific sale. Frontend filters `availableReasons` to exclude 'return' code. Backend maintains defensive validation for both purchase and return endpoints.
+- **Quantity Validation Auto-Trigger Fixed**: Fixed validation bugs in Add Movement form. Added `useEffect` to trigger validation when reason changes. Fixed `incrementQty`/`decrementQty` functions that were using stale `qtyInput` values due to closure bug. Now validation triggers immediately when quantity changes via buttons or direct input, preventing false validation errors.
 
 ## User Preferences
 
