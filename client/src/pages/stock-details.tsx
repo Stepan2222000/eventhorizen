@@ -223,10 +223,10 @@ export default function StockDetails() {
                         className="hover:bg-muted/50 transition-colors"
                         data-testid={`row-purchase-${purchase.id}`}
                       >
-                        <TableCell className="font-mono text-sm">
+                        <TableCell className="font-mono text-sm whitespace-nowrap">
                           {format(new Date(purchase.createdAt), "dd.MM.yyyy")}
                         </TableCell>
-                        <TableCell className="font-mono">{purchase.article}</TableCell>
+                        <TableCell className="font-mono whitespace-nowrap">{purchase.article}</TableCell>
                         <TableCell className="text-right">
                           {editingCell?.id === purchase.id && editingCell.field === 'qtyDelta' ? (
                             <div className="flex items-center justify-end gap-1">
@@ -369,7 +369,7 @@ export default function StockDetails() {
                             </button>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="whitespace-nowrap">
                           {editingCell?.id === purchase.id && editingCell.field === 'boxNumber' ? (
                             <div className="flex items-center gap-1">
                               <Input
@@ -411,14 +411,14 @@ export default function StockDetails() {
                               className="hover:bg-muted px-2 py-1 rounded transition-colors group inline-flex items-center"
                               data-testid={`button-edit-box-${purchase.id}`}
                             >
-                              <Badge variant="outline" className="font-mono">
+                              <Badge variant="outline" className="font-mono whitespace-nowrap">
                                 {purchase.boxNumber || "—"}
                               </Badge>
                               <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
                             </button>
                           )}
                         </TableCell>
-                        <TableCell className="text-right font-mono font-bold">
+                        <TableCell className="text-right font-mono font-bold whitespace-nowrap">
                           {getTotalPrice(purchase) ? `${getTotalPrice(purchase)} ₽` : "—"}
                         </TableCell>
                       </TableRow>
