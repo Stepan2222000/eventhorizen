@@ -265,14 +265,17 @@ export default function AddMovement() {
   };
 
   const handleAutocompleteSelect = (result: ArticleSearchResult) => {
-    // Set the full article code from the selected result
-    const fullArticles = result.articles.join(', ');
-    form.setValue('article', fullArticles);
+    // Set article field: use articles if available, otherwise use SMART code
+    const articleValue = result.articles && result.articles.length > 0 
+      ? result.articles.join(', ') 
+      : result.smart;
+    
+    form.setValue('article', articleValue);
     form.setValue('smart', result.smart);
     setAutocompleteOpen(false);
     setAutocompleteResults([]);
     toast({
-      title: "Артикул выбран",
+      title: "Позиция выбрана",
       description: `SMART код: ${result.smart}`,
     });
   };
@@ -347,7 +350,7 @@ export default function AddMovement() {
                                 <Command>
                                   <CommandList>
                                     <CommandEmpty>Ничего не найдено</CommandEmpty>
-                                    <CommandGroup heading="Найденные артикулы">
+                                    <CommandGroup heading="Найденные позиции">
                                       {autocompleteResults.map((result, idx) => (
                                         <CommandItem
                                           key={`${result.smart}-${idx}`}
@@ -357,14 +360,21 @@ export default function AddMovement() {
                                           data-testid={`autocomplete-item-${idx}`}
                                         >
                                           <div className="flex flex-col gap-1 w-full">
-                                            <div className="flex items-center justify-between">
-                                              <span className="font-mono text-sm font-medium">
-                                                {result.articles.join(', ')}
-                                              </span>
-                                              <span className="text-xs text-muted-foreground font-mono">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <span className="font-mono text-sm font-bold text-primary">
                                                 {result.smart}
                                               </span>
+                                              {result.brand && result.brand.length > 0 && (
+                                                <span className="text-xs text-muted-foreground">
+                                                  {result.brand.join(', ')}
+                                                </span>
+                                              )}
                                             </div>
+                                            {result.articles && result.articles.length > 0 && (
+                                              <span className="font-mono text-xs text-muted-foreground">
+                                                {result.articles.join(', ')}
+                                              </span>
+                                            )}
                                             {result.name && (
                                               <span className="text-xs text-muted-foreground">
                                                 {result.name}
@@ -445,10 +455,11 @@ export default function AddMovement() {
                           <div className="flex gap-2">
                             <Button 
                               type="button" 
-                              variant="destructive" 
+                              variant="outline" 
                               size="icon"
                               onClick={decrementQty}
                               data-testid="button-decrement-qty"
+                              className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
                             >
                               <i className="fas fa-minus"></i>
                             </Button>
@@ -467,10 +478,11 @@ export default function AddMovement() {
                             </FormControl>
                             <Button 
                               type="button" 
-                              className="bg-success text-success-foreground hover:bg-success/90"
+                              variant="outline"
                               size="icon"
                               onClick={incrementQty}
                               data-testid="button-increment-qty"
+                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
                             >
                               <i className="fas fa-plus"></i>
                             </Button>

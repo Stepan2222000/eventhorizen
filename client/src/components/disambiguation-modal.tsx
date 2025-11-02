@@ -47,10 +47,12 @@ export function DisambiguationModal({
                   </span>
                 )}
               </div>
-              <div className="text-xs text-muted-foreground mb-1">
-                <span className="font-semibold">Артикулы: </span>
-                <span className="font-mono">{match.articles.join(', ')}</span>
-              </div>
+              {match.articles && match.articles.length > 0 && (
+                <div className="text-xs text-muted-foreground mb-1">
+                  <span className="font-semibold">Артикулы: </span>
+                  <span className="font-mono">{match.articles.join(', ')}</span>
+                </div>
+              )}
               {match.description && match.description.length > 0 && (
                 <div className="text-xs text-foreground mb-1">
                   <span className="font-semibold">Описание: </span>
