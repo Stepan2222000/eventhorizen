@@ -82,15 +82,14 @@ export async function initializeInventoryDb() {
       )
     `);
     
-    // Create stock VIEW
+    // Create stock VIEW (grouped by SMART code only to aggregate across all articles)
     await pool.query(`
       CREATE OR REPLACE VIEW inventory.stock AS
       SELECT 
         smart,
-        article,
         SUM(qty_delta) as total_qty
       FROM inventory.movements
-      GROUP BY smart, article
+      GROUP BY smart
     `);
     
     console.log('Inventory database initialized successfully');
