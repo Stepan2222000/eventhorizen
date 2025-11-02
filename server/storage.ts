@@ -50,6 +50,7 @@ export interface IStorage {
   getStockLevels(limit?: number, offset?: number): Promise<StockLevel[]>;
   getStockBySmartAndArticle(smart: string, article: string): Promise<StockLevel | undefined>;
   getTotalStockBySmart(smart: string): Promise<number>;
+  getTotalStockBySmartBatch(smartCodes: string[]): Promise<Map<string, number>>;
   
   // Reasons
   getReasons(): Promise<Reason[]>;
@@ -716,6 +717,69 @@ export class DatabaseStorage implements IStorage {
     } catch (error) {
       console.error('Error getting total stock by SMART:', error);
       throw new Error('Failed to get total stock');
+    } finally {
+      if (pool) {
+        await pool.end();
+      }
+    }
+  }
+
+  async getTotalStockBySmartBatch(smartCodes: string[]): Promise<Map<string, number>> {
+    let pool: Pool | null = null;
+    const stockMap = new Map<string, number>();
+    
+    try {
+      // Return empty map if no codes provided
+      if (!smartCodes || smartCodes.length === 0) {
+        return stockMap;
+      }
+
+      // Get active inventory connection
+      const activeConn = await this.getActiveConnection('inventory');
+      
+      if (!activeConn) {
+        return stockMap;
+      }
+      
+      // Get full connection details
+      const fullConnections = await inventoryDb
+        .select()
+        .from(dbConnections)
+        .where(eq(dbConnections.id, activeConn.id))
+        .limit(1);
+      
+      if (!fullConnections.length) {
+        return stockMap;
+      }
+      
+      const conn = fullConnections[0];
+      pool = this.createExternalPool(conn);
+      
+      // Get stock for all SMART codes in one query
+      const result = await pool.query(
+        `SELECT smart, total_qty
+         FROM inventory.stock
+         WHERE smart = ANY($1)`,
+        [smartCodes]
+      );
+      
+      // Build map from results
+      for (const row of result.rows) {
+        stockMap.set(row.smart, row.total_qty || 0);
+      }
+      
+      // Fill in 0 for codes not found in stock
+      for (const code of smartCodes) {
+        if (!stockMap.has(code)) {
+          stockMap.set(code, 0);
+        }
+      }
+      
+      return stockMap;
+    } catch (error) {
+      console.error('Error getting total stock by SMART batch:', error);
+      // Return partial results or empty map instead of throwing
+      return stockMap;
     } finally {
       if (pool) {
         await pool.end();

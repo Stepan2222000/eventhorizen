@@ -58,19 +58,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const matches = await storage.searchSmart(normalized);
       
       // Get total stock by SMART code (aggregated across all article variants)
-      const results = await Promise.all(
-        matches.map(async (match) => {
-          const totalStock = await storage.getTotalStockBySmart(match.smart);
-          return {
-            smart: match.smart,
-            articles: match.articles,
-            brand: match.brand,
-            description: match.description,
-            name: match.name,
-            currentStock: totalStock,
-          };
-        })
-      );
+      // Use batch method to get all stock levels in one DB query
+      const smartCodes = matches.map(m => m.smart);
+      const stockMap = await storage.getTotalStockBySmartBatch(smartCodes);
+      
+      const results = matches.map(match => ({
+        smart: match.smart,
+        articles: match.articles,
+        brand: match.brand,
+        description: match.description,
+        name: match.name,
+        currentStock: stockMap.get(match.smart) || 0,
+      }));
 
       res.json(results);
     } catch (error) {
