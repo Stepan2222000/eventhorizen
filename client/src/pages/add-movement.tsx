@@ -50,7 +50,6 @@ const formSchema = insertMovementSchema.extend({
 type FormData = z.infer<typeof formSchema>;
 
 export default function AddMovement() {
-  const [qtyInput, setQtyInput] = useState(0);
   const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([]);
   const [showDisambiguation, setShowDisambiguation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -233,7 +232,6 @@ export default function AddMovement() {
       
       // Reset all form and search state
       form.reset();
-      setQtyInput(0);
       setSearchResults([]);
       setShowDisambiguation(false);
       setIsSearching(false);
@@ -255,21 +253,20 @@ export default function AddMovement() {
     
     createMovementMutation.mutate({
       ...data,
-      qtyDelta: qtyInput,
       saleStatus,
     });
   };
 
   const incrementQty = () => {
-    const newValue = qtyInput + 1;
-    setQtyInput(newValue);
+    const currentValue = form.getValues('qtyDelta');
+    const newValue = currentValue + 1;
     form.setValue('qtyDelta', newValue);
     form.trigger('qtyDelta');
   };
 
   const decrementQty = () => {
-    const newValue = qtyInput - 1;
-    setQtyInput(newValue);
+    const currentValue = form.getValues('qtyDelta');
+    const newValue = currentValue - 1;
     form.setValue('qtyDelta', newValue);
     form.trigger('qtyDelta');
   };
@@ -507,10 +504,9 @@ export default function AddMovement() {
                               <Input
                                 type="number"
                                 className="font-mono text-center"
-                                value={qtyInput}
+                                {...field}
                                 onChange={(e) => {
                                   const val = parseInt(e.target.value) || 0;
-                                  setQtyInput(val);
                                   field.onChange(val);
                                   form.trigger('qtyDelta');
                                 }}
@@ -618,7 +614,8 @@ export default function AddMovement() {
                           name="salePrice"
                           render={({ field }) => {
                             const salePrice = parseFloat(field.value || "0");
-                            const totalAmount = Math.abs(qtyInput) * salePrice;
+                            const qtyDelta = form.watch('qtyDelta');
+                            const totalAmount = Math.abs(qtyDelta) * salePrice;
                             
                             return (
                               <FormItem>
@@ -637,7 +634,7 @@ export default function AddMovement() {
                                   />
                                 </FormControl>
                                 <FormMessage />
-                                {salePrice > 0 && qtyInput !== 0 && (
+                                {salePrice > 0 && qtyDelta !== 0 && (
                                   <p className="text-xs text-muted-foreground mt-1">
                                     <i className="fas fa-calculator mr-1"></i>
                                     Общая сумма: {totalAmount.toFixed(2)} ₽
@@ -771,7 +768,6 @@ export default function AddMovement() {
                       variant="secondary"
                       onClick={() => {
                         form.reset();
-                        setQtyInput(0);
                         setSearchResults([]);
                         setShowDisambiguation(false);
                         setIsSearching(false);
