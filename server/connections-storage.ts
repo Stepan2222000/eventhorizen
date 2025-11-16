@@ -49,7 +49,7 @@ export async function getActiveConnectionByRole(role: ConnectionRole): Promise<S
 }
 
 // Create new connection
-export async function createConnection(data: InsertDbConnection): Promise<SafeDbConnection> {
+export async function createConnection(data: InsertDbConnection & { isActive?: boolean }): Promise<SafeDbConnection> {
   const connections = await readConnections();
 
   // Generate new ID
@@ -82,7 +82,7 @@ export async function createConnection(data: InsertDbConnection): Promise<SafeDb
 }
 
 // Update connection
-export async function updateConnection(id: number, data: Partial<InsertDbConnection>): Promise<SafeDbConnection | null> {
+export async function updateConnection(id: number, data: Partial<InsertDbConnection> & { isActive?: boolean }): Promise<SafeDbConnection | null> {
   const connections = await readConnections();
   const index = connections.findIndex(c => c.id === id);
 
@@ -137,10 +137,10 @@ export async function initializeDefaultConnections(): Promise<void> {
     return;
   }
 
-  // External database credentials (parts_admin)
+  // External database credentials (parts_info)
   const externalHost = '81.30.105.134';
-  const externalPort = 5403;
-  const externalDatabase = 'parts_admin';
+  const externalPort = 5404;
+  const externalDatabase = 'parts_info';
   const externalUsername = 'admin';
   const externalPassword = 'Password123';
 
