@@ -1,0 +1,48 @@
+[
+  {
+    "id": 1,
+    "name": "По умолчанию (SMART)",
+    "host": "81.30.105.134",
+    "port": 5403,
+    "database": "parts_admin",
+    "username": "admin",
+    "password": "Password123",
+    "ssl": null,
+    "role": "smart",
+    "tableName": "public.smart",
+    "fieldMapping": {
+      "smart": "smart",
+      "articles": "артикул",
+      "name": "наименование",
+      "brand": "бренд",
+      "description": "коннект_бренд"
+    },
+    "isActive": true,
+    "createdAt": "2025-11-16T16:05:28.092Z",
+    "updatedAt": "2025-11-16T16:05:28.092Z"
+  },
+  {
+    "id": 2,
+    "name": "По умолчанию (Учёт)",
+    "host": "81.30.105.134",
+    "port": 5403,
+    "database": "parts_admin",
+    "username": "admin",
+    "password": "Password123",
+    "ssl": null,
+    "role": "inventory",
+    "tableName": "inventory.movements",
+    "fieldMapping": {
+      "id": "id",
+      "smart": "smart",
+      "article": "article",
+      "qtyDelta": "qty_delta",
+      "reason": "reason",
+      "note": "note",
+      "createdAt": "created_at"
+    },
+    "isActive": true,
+    "createdAt": "2025-11-16T16:05:28.092Z",
+    "updatedAt": "2025-11-16T16:05:28.092Z"
+  }
+]

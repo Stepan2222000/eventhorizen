@@ -1,14 +1,14 @@
 import { defineConfig } from "drizzle-kit";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL, ensure the database is provisioned");
-}
+// DATABASE_URL is now optional - connections are stored in JSON file
+// This config is kept for backwards compatibility with drizzle-kit commands
+const DATABASE_URL = process.env.DATABASE_URL || "postgresql://localhost/eventhorizen";
 
 export default defineConfig({
   out: "./migrations",
   schema: "./shared/schema.ts",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL,
+    url: DATABASE_URL,
   },
 });

@@ -1,12 +1,12 @@
 import { eq, sql, and, ilike } from "drizzle-orm";
 import { partsDb, inventoryDb } from "./db";
 import { smart, reasons, movements, dbConnections, shippingMethods } from "@shared/schema";
-import type { 
-  Smart, 
-  Reason, 
-  Movement, 
-  InsertMovement, 
-  StockLevel, 
+import type {
+  Smart,
+  Reason,
+  Movement,
+  InsertMovement,
+  StockLevel,
   ArticleSearchResult,
   BulkImportRow,
   BulkImportResult,
@@ -23,6 +23,7 @@ import type {
 } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import { Pool } from "pg";
+import * as connectionsStorage from "./connections-storage";
 
 export class InsufficientStockError extends Error {
   constructor(
@@ -109,17 +110,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details (including password)
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       const fieldMapping = (conn.fieldMapping as any) || {};
       
       // Connect to external DB
@@ -196,17 +191,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details (including password)
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return undefined;
       }
-      
-      const conn = fullConnections[0];
       const fieldMapping = (conn.fieldMapping as any) || {};
       
       // Connect to external DB
@@ -316,17 +305,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details (including password)
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         throw new Error('Inventory connection not found');
       }
-      
-      const conn = fullConnections[0];
       
       // Connect to external DB
       pool = this.createExternalPool(conn);
@@ -446,17 +429,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details (including password)
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       
       // Connect to external DB
       pool = this.createExternalPool(conn);
@@ -507,17 +484,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details (including password)
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return undefined;
       }
-      
-      const conn = fullConnections[0];
       
       // Connect to external DB
       pool = this.createExternalPool(conn);
@@ -570,17 +541,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -628,17 +593,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       // Get stock aggregates from inventory view (grouped by SMART only)
@@ -701,17 +660,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return 0;
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       // View already groups by SMART, so just get the total_qty directly
@@ -751,17 +704,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return stockMap;
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       // Get stock for all SMART codes in one query
@@ -807,17 +754,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       // Get full connection details
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -844,17 +785,11 @@ export class DatabaseStorage implements IStorage {
         return [];
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -885,17 +820,11 @@ export class DatabaseStorage implements IStorage {
         throw new Error('No active inventory connection configured');
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         throw new Error('Inventory connection not found');
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -930,17 +859,11 @@ export class DatabaseStorage implements IStorage {
         throw new Error('No active inventory connection configured');
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         throw new Error('Inventory connection not found');
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       await pool.query(
@@ -966,17 +889,11 @@ export class DatabaseStorage implements IStorage {
         return [];
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -1021,17 +938,11 @@ export class DatabaseStorage implements IStorage {
         return [];
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -1077,17 +988,11 @@ export class DatabaseStorage implements IStorage {
         return [];
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       // Get items with zero stock but had sales
@@ -1123,14 +1028,9 @@ export class DatabaseStorage implements IStorage {
       // Get SMART names from external DB
       const smartConn = await this.getActiveConnection('smart');
       if (smartConn) {
-        const smartFullConnections = await inventoryDb
-          .select()
-          .from(dbConnections)
-          .where(eq(dbConnections.id, smartConn.id))
-          .limit(1);
-        
-        if (smartFullConnections.length) {
-          const smartConnData = smartFullConnections[0];
+        const smartConnData = await connectionsStorage.getConnectionById(smartConn.id);
+
+        if (smartConnData) {
           smartPool = this.createExternalPool(smartConnData);
           const fieldMapping = (smartConnData.fieldMapping as any) || {};
           const smartField = fieldMapping.smart || 'smart';
@@ -1189,17 +1089,11 @@ export class DatabaseStorage implements IStorage {
         return [];
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         return [];
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       // Calculate top parts with different metrics
@@ -1299,14 +1193,9 @@ export class DatabaseStorage implements IStorage {
       // Get SMART names from external DB
       const smartConn = await this.getActiveConnection('smart');
       if (smartConn) {
-        const smartFullConnections = await inventoryDb
-          .select()
-          .from(dbConnections)
-          .where(eq(dbConnections.id, smartConn.id))
-          .limit(1);
-        
-        if (smartFullConnections.length) {
-          const smartConnData = smartFullConnections[0];
+        const smartConnData = await connectionsStorage.getConnectionById(smartConn.id);
+
+        if (smartConnData) {
           smartPool = this.createExternalPool(smartConnData);
           const fieldMapping = (smartConnData.fieldMapping as any) || {};
           const smartField = fieldMapping.smart || 'smart';
@@ -1355,17 +1244,11 @@ export class DatabaseStorage implements IStorage {
         throw new Error('No active inventory connection configured');
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         throw new Error('Inventory connection not found');
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const setClauses: string[] = [];
@@ -1446,17 +1329,11 @@ export class DatabaseStorage implements IStorage {
         throw new Error('No active inventory connection configured');
       }
       
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (!fullConnections.length) {
+      const conn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (!conn) {
         throw new Error('Inventory connection not found');
       }
-      
-      const conn = fullConnections[0];
       pool = this.createExternalPool(conn);
       
       const result = await pool.query(
@@ -1569,13 +1446,7 @@ export class DatabaseStorage implements IStorage {
 
   async getDbConnections(): Promise<SafeDbConnection[]> {
     try {
-      const result = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .orderBy(sql`created_at DESC`);
-      
-      // Remove password from all results
-      return result.map(({ password, ...safe }) => safe);
+      return await connectionsStorage.getConnections();
     } catch (error) {
       console.error('Error getting DB connections:', error);
       throw new Error('Failed to get database connections');
@@ -1584,17 +1455,7 @@ export class DatabaseStorage implements IStorage {
 
   async createDbConnection(connection: InsertDbConnection): Promise<SafeDbConnection> {
     try {
-      const result = await inventoryDb
-        .insert(dbConnections)
-        .values({
-          ...connection,
-          updatedAt: new Date(),
-        })
-        .returning();
-      
-      // Remove password from response
-      const { password, ...safe } = result[0];
-      return safe;
+      return await connectionsStorage.createConnection(connection);
     } catch (error) {
       console.error('Error creating DB connection:', error);
       throw error;
@@ -1603,9 +1464,10 @@ export class DatabaseStorage implements IStorage {
 
   async deleteDbConnection(id: number): Promise<void> {
     try {
-      await inventoryDb
-        .delete(dbConnections)
-        .where(eq(dbConnections.id, id));
+      const deleted = await connectionsStorage.deleteConnection(id);
+      if (!deleted) {
+        throw new Error('Connection not found');
+      }
     } catch (error) {
       console.error('Error deleting DB connection:', error);
       throw new Error('Failed to delete database connection');
@@ -1650,30 +1512,24 @@ export class DatabaseStorage implements IStorage {
     let pool: Pool | null = null;
     try {
       // Get connection details
-      const connections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, connectionId))
-        .limit(1);
-      
-      if (!connections.length) {
+      const connection = await connectionsStorage.getConnectionById(connectionId);
+
+      if (!connection) {
         throw new Error('Connection not found');
       }
-      
-      const connection = connections[0];
-      
+
       // Connect and get tables
       pool = this.createExternalPool(connection);
       const result = await pool.query(`
-        SELECT 
+        SELECT
           table_schema as schema,
           table_name as name,
           table_type as type
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
         ORDER BY table_schema, table_name
       `);
-      
+
       return {
         connectionName: connection.name,
         tables: result.rows.map((row: any) => ({
@@ -1695,37 +1551,25 @@ export class DatabaseStorage implements IStorage {
   async configureConnection(payload: ConfigureConnectionPayload): Promise<SafeDbConnection> {
     try {
       const { connectionId, role, tableName, fieldMapping } = payload;
-      
+
       // Deactivate other connections with the same role
       if (role) {
-        await inventoryDb
-          .update(dbConnections)
-          .set({ isActive: false })
-          .where(and(
-            eq(dbConnections.role, role),
-            sql`${dbConnections.id} != ${connectionId}`
-          ));
+        await connectionsStorage.deactivateConnectionsByRole(role, connectionId);
       }
-      
+
       // Update connection configuration
-      const result = await inventoryDb
-        .update(dbConnections)
-        .set({
-          role,
-          tableName,
-          fieldMapping: fieldMapping as any,
-          isActive: role ? true : false,
-          updatedAt: new Date(),
-        })
-        .where(eq(dbConnections.id, connectionId))
-        .returning();
-      
-      if (!result.length) {
+      const result = await connectionsStorage.updateConnection(connectionId, {
+        role,
+        tableName,
+        fieldMapping: fieldMapping as any,
+        isActive: role ? true : false,
+      });
+
+      if (!result) {
         throw new Error('Connection not found');
       }
-      
-      const { password, ...safe } = result[0];
-      return safe;
+
+      return result;
     } catch (error) {
       console.error('Error configuring connection:', error);
       throw new Error(error instanceof Error ? error.message : 'Failed to configure connection');
@@ -1735,20 +1579,8 @@ export class DatabaseStorage implements IStorage {
   async getActiveConnection(role: ConnectionRole): Promise<SafeDbConnection | null> {
     try {
       if (!role) return null;
-      
-      const result = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(and(
-          eq(dbConnections.role, role),
-          eq(dbConnections.isActive, true)
-        ))
-        .limit(1);
-      
-      if (!result.length) return null;
-      
-      const { password, ...safe } = result[0];
-      return safe;
+
+      return await connectionsStorage.getActiveConnectionByRole(role);
     } catch (error) {
       console.error('Error getting active connection:', error);
       throw new Error('Failed to get active connection');
@@ -1759,35 +1591,29 @@ export class DatabaseStorage implements IStorage {
     let pool: Pool | null = null;
     try {
       // Get connection details
-      const connections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, connectionId))
-        .limit(1);
-      
-      if (!connections.length) {
+      const connection = await connectionsStorage.getConnectionById(connectionId);
+
+      if (!connection) {
         throw new Error('Connection not found');
       }
-      
-      const connection = connections[0];
-      
+
       // Connect and get columns
       pool = this.createExternalPool(connection);
-      
+
       // Parse schema and table name
-      const [schema, table] = tableName.includes('.') 
-        ? tableName.split('.') 
+      const [schema, table] = tableName.includes('.')
+        ? tableName.split('.')
         : ['public', tableName];
-      
+
       const result = await pool.query(`
-        SELECT 
+        SELECT
           column_name as name,
           data_type as type
-        FROM information_schema.columns 
+        FROM information_schema.columns
         WHERE table_schema = $1 AND table_name = $2
         ORDER BY ordinal_position
       `, [schema, table]);
-      
+
       return result.rows.map((row: any) => ({
         name: row.name,
         type: row.type,
@@ -1804,78 +1630,27 @@ export class DatabaseStorage implements IStorage {
 
   async createDefaultConnections(): Promise<void> {
     try {
-      // Check if default connections already exist
-      const existing = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(sql`${dbConnections.name} LIKE 'По умолчанию%'`);
-      
-      if (existing.length > 0) {
-        console.log('Default connections already exist, skipping...');
-        return;
+      // Initialize default connections from JSON file
+      await connectionsStorage.initializeDefaultConnections();
+
+      // Get the created connections
+      const connections = await connectionsStorage.getConnections();
+      const inventoryConn = connections.find(c => c.role === 'inventory' && c.name.includes('По умолчанию'));
+
+      if (inventoryConn) {
+        // Get full connection details with password
+        const fullConn = await connectionsStorage.getConnectionById(inventoryConn.id);
+        if (fullConn) {
+          // Initialize inventory schema in external database
+          await this.initializeExternalInventoryDb(
+            fullConn.host,
+            fullConn.port,
+            fullConn.database,
+            fullConn.username,
+            fullConn.password
+          );
+        }
       }
-
-      // External database credentials (parts_admin)
-      const externalHost = '81.30.105.134';
-      const externalPort = 5403;
-      const externalDatabase = 'parts_admin';
-      const externalUsername = 'admin';
-      const externalPassword = 'Password123';
-
-      // Create SMART connection to external database
-      await inventoryDb.insert(dbConnections).values({
-        name: 'По умолчанию (SMART)',
-        host: externalHost,
-        port: externalPort,
-        database: externalDatabase,
-        username: externalUsername,
-        password: externalPassword,
-        role: 'smart',
-        tableName: 'public.smart',
-        fieldMapping: {
-          smart: 'smart',
-          articles: 'артикул',
-          name: 'наименование',
-          brand: 'бренд',
-          description: 'коннект_бренд',
-        } as any,
-        isActive: true,
-        updatedAt: new Date(),
-      });
-
-      // Create Inventory connection to external database
-      await inventoryDb.insert(dbConnections).values({
-        name: 'По умолчанию (Учёт)',
-        host: externalHost,
-        port: externalPort,
-        database: externalDatabase,
-        username: externalUsername,
-        password: externalPassword,
-        role: 'inventory',
-        tableName: 'inventory.movements',
-        fieldMapping: {
-          id: 'id',
-          smart: 'smart',
-          article: 'article',
-          qtyDelta: 'qty_delta',
-          reason: 'reason',
-          note: 'note',
-          createdAt: 'created_at',
-        } as any,
-        isActive: true,
-        updatedAt: new Date(),
-      });
-
-      console.log('Default connections created successfully');
-      
-      // Initialize inventory schema in external database
-      await this.initializeExternalInventoryDb(
-        externalHost,
-        externalPort,
-        externalDatabase,
-        externalUsername,
-        externalPassword
-      );
     } catch (error) {
       console.error('Error creating default connections:', error);
       // Don't throw, just log - this is optional

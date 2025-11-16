@@ -1,25 +1,20 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage, InsufficientStockError } from "./storage";
-import { initializeInventoryDb, ensureExternalDbSchema } from "./db";
+import { ensureExternalDbSchema } from "./db";
 import { insertMovementSchema } from "@shared/schema";
 import { normalizeArticle } from "@shared/normalization";
 import type { BulkImportRow } from "@shared/schema";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { inventoryDb } from "./db";
-import { dbConnections } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import * as connectionsStorage from "./connections-storage";
 
 const upload = multer({ storage: multer.memoryStorage() });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Initialize database
-  await initializeInventoryDb();
-  
   // Create default connections if they don't exist
   await storage.createDefaultConnections();
-  
+
   // Ensure external inventory database has correct schema
   try {
     console.log('Checking for active inventory connection...');
@@ -27,15 +22,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (activeConn) {
       console.log('Found active inventory connection:', activeConn.name);
       // Get full connection details including password
-      const fullConnections = await inventoryDb
-        .select()
-        .from(dbConnections)
-        .where(eq(dbConnections.id, activeConn.id))
-        .limit(1);
-      
-      if (fullConnections.length > 0) {
+      const fullConn = await connectionsStorage.getConnectionById(activeConn.id);
+
+      if (fullConn) {
         console.log('Updating external database schema...');
-        await ensureExternalDbSchema(fullConnections[0]);
+        await ensureExternalDbSchema(fullConn);
       } else {
         console.log('No full connection details found');
       }
