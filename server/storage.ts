@@ -25,6 +25,16 @@ import { normalizeArticle } from "@shared/normalization";
 import { Pool } from "pg";
 import * as connectionsStorage from "./connections-storage";
 
+function getPgSslConfig(mode: unknown) {
+  if (!mode || typeof mode !== "string") return undefined;
+  const normalized = mode.trim().toLowerCase();
+  if (!normalized || normalized === "disable") return undefined;
+  if (normalized === "verify-ca" || normalized === "verify-full") {
+    return { rejectUnauthorized: true };
+  }
+  return { rejectUnauthorized: false };
+}
+
 export class InsufficientStockError extends Error {
   constructor(
     public article: string,
@@ -94,7 +104,7 @@ export class DatabaseStorage implements IStorage {
       database: conn.database,
       user: conn.username,
       password: conn.password,
-      ssl: conn.ssl ? { rejectUnauthorized: false } : undefined,
+      ssl: getPgSslConfig(conn.ssl),
     });
   }
 
@@ -1265,51 +1275,119 @@ export class DatabaseStorage implements IStorage {
         values.push(updates.note);
       }
       
-      if (updates.qtyDelta !== undefined) {
-        setClauses.push(`qty_delta = $${paramIndex++}`);
-        values.push(updates.qtyDelta);
-      }
-      
       if (updates.boxNumber !== undefined) {
         setClauses.push(`box_number = $${paramIndex++}`);
         values.push(updates.boxNumber);
       }
       
-      if (setClauses.length === 0) {
-        throw new Error('No fields to update');
+      if (updates.qtyDelta === undefined) {
+        if (setClauses.length === 0) {
+          throw new Error('No fields to update');
+        }
+
+        values.push(id);
+        const result = await pool.query(
+          `UPDATE inventory.movements
+           SET ${setClauses.join(', ')}
+           WHERE id = $${paramIndex}
+           RETURNING *`,
+          values
+        );
+
+        if (result.rows.length === 0) {
+          throw new Error('Movement not found');
+        }
+
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          smart: row.smart,
+          article: row.article,
+          qtyDelta: row.qty_delta,
+          reason: row.reason,
+          note: row.note,
+          purchasePrice: row.purchase_price,
+          salePrice: row.sale_price,
+          deliveryPrice: row.delivery_price,
+          boxNumber: row.box_number,
+          trackNumber: row.track_number,
+          shippingMethodId: row.shipping_method_id,
+          saleStatus: row.sale_status,
+          createdAt: row.created_at,
+        };
       }
-      
-      values.push(id);
-      
-      const result = await pool.query(
-        `UPDATE inventory.movements 
-         SET ${setClauses.join(', ')}
-         WHERE id = $${paramIndex}
-         RETURNING *`,
-        values
-      );
-      
-      if (result.rows.length === 0) {
-        throw new Error('Movement not found');
+
+      // qty_delta updates can change stock totals; validate within a SERIALIZABLE transaction.
+      await pool.query('BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE');
+      try {
+        const existingRes = await pool.query(
+          `SELECT id, smart, article, qty_delta, reason
+           FROM inventory.movements
+           WHERE id = $1
+           FOR UPDATE`,
+          [id]
+        );
+        if (existingRes.rows.length === 0) {
+          throw new Error('Movement not found');
+        }
+
+        const existing = existingRes.rows[0];
+        const oldQtyDelta = Number(existing.qty_delta) || 0;
+        const absQty = Math.abs(updates.qtyDelta);
+
+        let nextQtyDelta = absQty;
+        if (existing.reason === 'sale' || existing.reason === 'writeoff') {
+          nextQtyDelta = -absQty;
+        } else if (existing.reason === 'adjust') {
+          // Keep legacy adjust sign stable (UI sends only absolute qty).
+          nextQtyDelta = oldQtyDelta < 0 ? -absQty : absQty;
+        }
+
+        const currentStock = await this.getCurrentStock(pool, existing.smart, existing.article);
+        const nextStock = currentStock - oldQtyDelta + nextQtyDelta;
+        if (nextStock < 0) {
+          throw new InsufficientStockError(existing.article, existing.smart, currentStock, currentStock - nextStock);
+        }
+
+        setClauses.push(`qty_delta = $${paramIndex++}`);
+        values.push(nextQtyDelta);
+
+        values.push(id);
+        const result = await pool.query(
+          `UPDATE inventory.movements
+           SET ${setClauses.join(', ')}
+           WHERE id = $${paramIndex}
+           RETURNING *`,
+          values
+        );
+
+        if (result.rows.length === 0) {
+          throw new Error('Movement not found');
+        }
+
+        await pool.query('COMMIT');
+
+        const row = result.rows[0];
+        return {
+          id: row.id,
+          smart: row.smart,
+          article: row.article,
+          qtyDelta: row.qty_delta,
+          reason: row.reason,
+          note: row.note,
+          purchasePrice: row.purchase_price,
+          salePrice: row.sale_price,
+          deliveryPrice: row.delivery_price,
+          boxNumber: row.box_number,
+          trackNumber: row.track_number,
+          shippingMethodId: row.shipping_method_id,
+          saleStatus: row.sale_status,
+          createdAt: row.created_at,
+        };
+      } catch (txError) {
+        await pool.query('ROLLBACK');
+        throw txError;
       }
-      
-      const row = result.rows[0];
-      return {
-        id: row.id,
-        smart: row.smart,
-        article: row.article,
-        qtyDelta: row.qty_delta,
-        reason: row.reason,
-        note: row.note,
-        purchasePrice: row.purchase_price,
-        salePrice: row.sale_price,
-        deliveryPrice: row.delivery_price,
-        boxNumber: row.box_number,
-        trackNumber: row.track_number,
-        shippingMethodId: row.shipping_method_id,
-        saleStatus: row.sale_status,
-        createdAt: row.created_at,
-      };
     } catch (error) {
       console.error('Error updating movement:', error);
       throw error;
@@ -1382,6 +1460,10 @@ export class DatabaseStorage implements IStorage {
       errors: []
     };
 
+    // Validate against the current reasons table once (avoid N identical queries).
+    const validReasons = await this.getReasons();
+    const validReasonCodes = new Set(validReasons.map((r) => r.code));
+
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
@@ -1412,12 +1494,29 @@ export class DatabaseStorage implements IStorage {
         }
 
         // Validate reason
-        const validReasons = await this.getReasons();
-        if (!validReasons.find(r => r.code === row.reason)) {
+        if (!validReasonCodes.has(row.reason)) {
           result.errors.push({
             row: i + 1,
             error: `Invalid reason code: ${row.reason}`,
             data: row
+          });
+          continue;
+        }
+
+        // Validate qty sign by reason to avoid corrupting stock with a bad import file.
+        if ((row.reason === "purchase" || row.reason === "return") && row.qtyDelta <= 0) {
+          result.errors.push({
+            row: i + 1,
+            error: `Invalid qty_delta for reason ${row.reason}: expected positive, got ${row.qtyDelta}`,
+            data: row,
+          });
+          continue;
+        }
+        if ((row.reason === "sale" || row.reason === "writeoff") && row.qtyDelta >= 0) {
+          result.errors.push({
+            row: i + 1,
+            error: `Invalid qty_delta for reason ${row.reason}: expected negative, got ${row.qtyDelta}`,
+            data: row,
           });
           continue;
         }
@@ -1484,7 +1583,7 @@ export class DatabaseStorage implements IStorage {
         database: connection.database,
         user: connection.username,
         password: connection.password,
-        ssl: connection.ssl ? { rejectUnauthorized: false } : undefined,
+        ssl: getPgSslConfig(connection.ssl),
       });
       
       // Try to connect
@@ -1635,7 +1734,7 @@ export class DatabaseStorage implements IStorage {
 
       // Get the created connections
       const connections = await connectionsStorage.getConnections();
-      const inventoryConn = connections.find(c => c.role === 'inventory' && c.name.includes('По умолчанию'));
+      const inventoryConn = connections.find(c => c.role === 'inventory' && c.isActive && c.name.includes('По умолчанию'));
 
       if (inventoryConn) {
         // Get full connection details with password

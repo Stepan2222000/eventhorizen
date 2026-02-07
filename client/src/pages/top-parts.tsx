@@ -11,7 +11,7 @@ export default function TopParts() {
   const [mode, setMode] = useState<RankingMode>('combined');
 
   const { data: items, isLoading } = useQuery<TopPart[]>({
-    queryKey: ['/api/top-parts', { mode }],
+    queryKey: [`/api/top-parts?mode=${mode}`],
   });
 
   if (isLoading) {

@@ -59,6 +59,10 @@ export default function StockDetails() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       toast({
         title: "Сохранено",
         description: "Изменения успешно сохранены",

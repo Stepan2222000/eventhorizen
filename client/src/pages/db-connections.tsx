@@ -122,7 +122,6 @@ export default function DbConnections() {
       return await res.json() as DbTablesResult;
     },
     onSuccess: (data) => {
-      setViewTablesId(null);
       toast({ 
         description: `Найдено таблиц: ${data.tables.length}` 
       });
@@ -226,6 +225,29 @@ export default function DbConnections() {
       toast({ 
         variant: "destructive", 
         description: "Заполните все обязательные поля" 
+      });
+      return;
+    }
+
+    const nonEmpty = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+    const missingKeys: string[] = [];
+    if (selectedRole === "smart") {
+      const m = fieldMapping as SmartFieldMapping;
+      if (!nonEmpty(m.smart)) missingKeys.push("smart");
+      if (!nonEmpty(m.articles)) missingKeys.push("articles");
+    } else if (selectedRole === "inventory") {
+      const m = fieldMapping as InventoryFieldMapping;
+      if (!nonEmpty(m.id)) missingKeys.push("id");
+      if (!nonEmpty(m.smart)) missingKeys.push("smart");
+      if (!nonEmpty(m.article)) missingKeys.push("article");
+      if (!nonEmpty(m.qtyDelta)) missingKeys.push("qtyDelta");
+      if (!nonEmpty(m.reason)) missingKeys.push("reason");
+      if (!nonEmpty(m.createdAt)) missingKeys.push("createdAt");
+    }
+    if (missingKeys.length > 0) {
+      toast({
+        variant: "destructive",
+        description: `Заполните обязательные поля маппинга: ${missingKeys.join(", ")}`,
       });
       return;
     }

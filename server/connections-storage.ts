@@ -137,6 +137,10 @@ export async function initializeDefaultConnections(): Promise<void> {
     return;
   }
 
+  const hasActiveSmart = existing.some((c) => c.role === "smart" && c.isActive);
+  const hasActiveInventory = existing.some((c) => c.role === "inventory" && c.isActive);
+  const maxId = existing.reduce((acc, c) => Math.max(acc, c.id ?? 0), 0);
+
   // External database credentials (parts_info)
   const externalHost = '81.30.105.134';
   const externalPort = 5404;
@@ -148,7 +152,7 @@ export async function initializeDefaultConnections(): Promise<void> {
 
   // Create SMART connection
   const smartConnection: DbConnection = {
-    id: 1,
+    id: existing.length === 0 ? 1 : maxId + 1,
     name: 'По умолчанию (SMART)',
     host: externalHost,
     port: externalPort,
@@ -165,14 +169,14 @@ export async function initializeDefaultConnections(): Promise<void> {
       brand: 'бренд',
       description: 'коннект_бренд',
     },
-    isActive: true,
+    isActive: existing.length === 0 ? true : !hasActiveSmart,
     createdAt: now,
     updatedAt: now,
   };
 
   // Create Inventory connection
   const inventoryConnection: DbConnection = {
-    id: 2,
+    id: existing.length === 0 ? 2 : maxId + 2,
     name: 'По умолчанию (Учёт)',
     host: externalHost,
     port: externalPort,
@@ -191,11 +195,11 @@ export async function initializeDefaultConnections(): Promise<void> {
       note: 'note',
       createdAt: 'created_at',
     },
-    isActive: true,
+    isActive: existing.length === 0 ? true : !hasActiveInventory,
     createdAt: now,
     updatedAt: now,
   };
 
-  await writeConnections([smartConnection, inventoryConnection]);
+  await writeConnections(existing.length === 0 ? [smartConnection, inventoryConnection] : [...existing, smartConnection, inventoryConnection]);
   console.log('Default connections created successfully');
 }

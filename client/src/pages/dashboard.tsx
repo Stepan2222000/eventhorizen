@@ -195,7 +195,7 @@ export default function Dashboard() {
                   {(stockLevels as StockLevel[] || []).slice(0, 5).map((item) => {
                     const status = getStockStatus(item.totalQty);
                     return (
-                      <div key={`${item.smart}-${item.article}`} className="flex items-center justify-between p-3 rounded border hover:bg-muted/50 transition-colors">
+                      <div key={item.smart} className="flex items-center justify-between p-3 rounded border hover:bg-muted/50 transition-colors">
                         <div>
                           <div className="font-mono font-semibold text-sm">{item.smart}</div>
                           <div className="text-xs text-muted-foreground">{item.description}</div>

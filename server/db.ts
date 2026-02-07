@@ -2,6 +2,17 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from "@shared/schema";
 
+function getPgSslConfig(mode: unknown) {
+  if (!mode || typeof mode !== 'string') return undefined;
+  const normalized = mode.trim().toLowerCase();
+  if (!normalized || normalized === 'disable') return undefined;
+  if (normalized === 'verify-ca' || normalized === 'verify-full') {
+    return { rejectUnauthorized: true };
+  }
+  // prefer/require and any other truthy string: enable SSL, but allow self-signed by default
+  return { rejectUnauthorized: false };
+}
+
 // DATABASE_URL is now optional - connections are stored in JSON file
 // These DB instances are only used for backwards compatibility if needed
 const pool = process.env.DATABASE_URL ? new Pool({
@@ -19,7 +30,7 @@ export async function ensureExternalDbSchema(connectionDetails: any) {
     database: connectionDetails.database,
     user: connectionDetails.username,
     password: connectionDetails.password,
-    ssl: connectionDetails.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl: getPgSslConfig(connectionDetails.ssl),
   });
 
   try {
@@ -44,27 +55,17 @@ export async function ensureExternalDbSchema(connectionDetails: any) {
       ON CONFLICT (code) DO NOTHING
     `);
     
-    // Update any movements using old 'adjust' reason to 'purchase'
-    await externalPool.query(`
-      UPDATE inventory.movements 
-      SET reason = 'purchase' 
-      WHERE reason = 'adjust'
-    `);
-    
-    // Remove old 'adjust' reason if exists
-    await externalPool.query(`DELETE FROM inventory.reasons WHERE code = 'adjust'`);
-    
     // Create shipping_methods table
     await externalPool.query(`
       CREATE TABLE IF NOT EXISTS inventory.shipping_methods (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW() NOT NULL
-      )
-    `);
-    
-    // Insert default shipping methods only if table is empty
-    const result = await externalPool.query(`SELECT COUNT(*) FROM inventory.shipping_methods`);
+	      )
+	    `);
+	    
+	    // Insert default shipping methods only if table is empty
+	    const result = await externalPool.query(`SELECT COUNT(*) FROM inventory.shipping_methods`);
     if (parseInt(result.rows[0].count) === 0) {
       await externalPool.query(`
         INSERT INTO inventory.shipping_methods (name) VALUES
@@ -75,23 +76,33 @@ export async function ensureExternalDbSchema(connectionDetails: any) {
       `);
     }
     
-    // Create movements table
-    await externalPool.query(`
-      CREATE TABLE IF NOT EXISTS inventory.movements (
-        id SERIAL PRIMARY KEY,
-        smart VARCHAR NOT NULL,
-        article TEXT NOT NULL,
-        qty_delta INTEGER NOT NULL,
-        reason VARCHAR NOT NULL,
-        note TEXT,
-        created_at TIMESTAMP DEFAULT NOW() NOT NULL
-      )
-    `);
-    
-    // Add new columns to movements table if they don't exist
-    const columns = [
-      { name: 'purchase_price', type: 'NUMERIC(10, 2)' },
-      { name: 'sale_price', type: 'NUMERIC(10, 2)' },
+	    // Create movements table
+	    await externalPool.query(`
+	      CREATE TABLE IF NOT EXISTS inventory.movements (
+	        id SERIAL PRIMARY KEY,
+	        smart VARCHAR NOT NULL,
+	        article TEXT NOT NULL,
+	        qty_delta INTEGER NOT NULL,
+	        reason VARCHAR NOT NULL,
+	        note TEXT,
+	        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+	      )
+	    `);
+
+	    // Migrate legacy reason code "adjust" to "purchase" (table now exists).
+	    await externalPool.query(`
+	      UPDATE inventory.movements
+	      SET reason = 'purchase'
+	      WHERE reason = 'adjust'
+	    `);
+
+	    // Remove old 'adjust' reason if exists
+	    await externalPool.query(`DELETE FROM inventory.reasons WHERE code = 'adjust'`);
+	    
+	    // Add new columns to movements table if they don't exist
+	    const columns = [
+	      { name: 'purchase_price', type: 'NUMERIC(10, 2)' },
+	      { name: 'sale_price', type: 'NUMERIC(10, 2)' },
       { name: 'delivery_price', type: 'NUMERIC(10, 2)' },
       { name: 'box_number', type: 'VARCHAR(50)' },
       { name: 'track_number', type: 'TEXT' },

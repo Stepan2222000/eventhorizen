@@ -45,6 +45,8 @@ export default function SoldItems() {
     onSuccess: () => {
       console.log("Return mutation SUCCESS");
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       toast({
         title: "Товар возвращен",
         description: "Товар возвращен на склад",

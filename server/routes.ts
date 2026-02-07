@@ -46,6 +46,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const normalized = normalizeArticle(query);
+      if (!normalized || normalized.length < 2) {
+        return res.status(400).json({ error: "Query parameter is too short" });
+      }
       const matches = await storage.searchSmart(normalized);
       
       // Get total stock by SMART code (aggregated across all article variants)
@@ -295,7 +298,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update movement (purchase price, note, quantity, box number)
   app.patch("/api/movements/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
       const { purchasePrice, note, qtyDelta, boxNumber } = req.body;
       
       const updates: Partial<{purchasePrice: string | null; note: string | null; qtyDelta: number; boxNumber: string | null}> = {};
@@ -323,6 +329,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updatedMovement);
     } catch (error) {
       console.error("Update movement error:", error);
+
+      if (error instanceof InsufficientStockError) {
+        return res.status(409).json({
+          error: error.message,
+          details: {
+            article: error.article,
+            smart: error.smart,
+            currentStock: error.currentStock,
+            requestedQty: error.requestedQty,
+          },
+        });
+      }
+
+      if (error instanceof Error) {
+        if (error.message === "Movement not found") {
+          return res.status(404).json({ error: error.message });
+        }
+        return res.status(400).json({ error: error.message });
+      }
+
       res.status(500).json({ error: "Failed to update movement" });
     }
   });
@@ -533,6 +559,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // CSV file
         const csvText = req.file.buffer.toString('utf-8');
         const lines = csvText.split('\n').filter(line => line.trim());
+        if (lines.length === 0) {
+          return res.status(400).json({ error: "Empty CSV file" });
+        }
         const headers = lines[0].split(',').map(h => h.trim());
         
         for (let i = 1; i < lines.length; i++) {
@@ -680,14 +709,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/db-connections/:id/configure", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const { role, tableName, fieldMapping } = req.body;
+      const id = parseInt(req.params.id, 10);
+      if (Number.isNaN(id)) {
+        return res.status(400).json({ error: "Invalid ID" });
+      }
+
+      const { role, tableName, fieldMapping } = req.body as {
+        role: unknown;
+        tableName: unknown;
+        fieldMapping: unknown;
+      };
+
+      if (role !== null && role !== "smart" && role !== "inventory") {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      if (!tableName || typeof tableName !== "string") {
+        return res.status(400).json({ error: "tableName is required" });
+      }
+
+      if (!fieldMapping || typeof fieldMapping !== "object") {
+        return res.status(400).json({ error: "fieldMapping is required" });
+      }
+
+      const requireNonEmpty = (obj: Record<string, unknown>, keys: string[]) => {
+        const missing = keys.filter((k) => typeof obj[k] !== "string" || !(obj[k] as string).trim());
+        return missing;
+      };
+
+      const mappingObj = fieldMapping as Record<string, unknown>;
+      if (role === "smart") {
+        const missing = requireNonEmpty(mappingObj, ["smart", "articles"]);
+        if (missing.length > 0) {
+          return res.status(400).json({ error: `Missing fieldMapping keys: ${missing.join(", ")}` });
+        }
+      }
+      if (role === "inventory") {
+        const missing = requireNonEmpty(mappingObj, ["id", "smart", "article", "qtyDelta", "reason", "createdAt"]);
+        if (missing.length > 0) {
+          return res.status(400).json({ error: `Missing fieldMapping keys: ${missing.join(", ")}` });
+        }
+      }
+
+      // If user is activating an inventory connection, make sure the target DB schema exists first.
+      if (role === "inventory") {
+        const fullConn = await connectionsStorage.getConnectionById(id);
+        if (!fullConn) {
+          return res.status(404).json({ error: "Connection not found" });
+        }
+        await ensureExternalDbSchema(fullConn);
+      }
       
       const result = await storage.configureConnection({
         connectionId: id,
-        role,
+        role: role as "smart" | "inventory" | null,
         tableName,
-        fieldMapping,
+        fieldMapping: fieldMapping as any,
       });
       
       res.json(result);
@@ -711,7 +788,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const columns = await storage.getTableColumns(id, tableName);
-      res.json({ columns });
+      // Keep API contract in sync with `DbColumnsResult` (shared/schema.ts): string[]
+      res.json({ columns: columns.map((c: any) => c?.name).filter((n: any) => typeof n === "string") });
     } catch (error) {
       console.error("Get table columns error:", error);
       if (error instanceof Error) {

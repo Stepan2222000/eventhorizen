@@ -62,6 +62,23 @@ export default function AddMovement() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
+  const clearPrefillParamsFromUrl = () => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const hadSmart = searchParams.has("smart");
+    const hadArticle = searchParams.has("article");
+    if (!hadSmart && !hadArticle) return;
+
+    searchParams.delete("smart");
+    searchParams.delete("article");
+
+    const nextSearch = searchParams.toString();
+    const nextUrl =
+      window.location.pathname +
+      (nextSearch ? `?${nextSearch}` : "") +
+      window.location.hash;
+    window.history.replaceState(null, "", nextUrl);
+  };
+
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -236,6 +253,7 @@ export default function AddMovement() {
       setShowDisambiguation(false);
       setIsSearching(false);
       setLastSearchedArticle("");
+      clearPrefillParamsFromUrl();
       setHasPrefilled(false);
     },
     onError: (error) => {
@@ -772,6 +790,7 @@ export default function AddMovement() {
                         setShowDisambiguation(false);
                         setIsSearching(false);
                         setLastSearchedArticle("");
+                        clearPrefillParamsFromUrl();
                         setHasPrefilled(false);
                       }}
                       data-testid="button-clear-form"
