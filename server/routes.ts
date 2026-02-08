@@ -1,47 +1,172 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
-import { storage, InsufficientStockError } from "./storage";
-import { ensureExternalDbSchema } from "./db";
-import { insertMovementSchema } from "@shared/schema";
-import { normalizeArticle } from "@shared/normalization";
-import type { BulkImportRow } from "@shared/schema";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import * as connectionsStorage from "./connections-storage";
+import { z } from "zod";
+import { normalizeArticle } from "@shared/normalization";
+import { insertMovementSchema, saleStatusSchema, type BulkImportRow } from "@shared/schema";
+import type { AppContext } from "./context";
+import { InsufficientStockError, InvalidRequestError } from "./storage";
 
-const upload = multer({ storage: multer.memoryStorage() });
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 
-export async function registerRoutes(app: Express): Promise<Server> {
-  // Create default connections if they don't exist
-  await storage.createDefaultConnections();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_IMPORT_FILE_BYTES },
+});
 
-  // Ensure external inventory database has correct schema
-  try {
-    console.log('Checking for active inventory connection...');
-    const activeConn = await storage.getActiveConnection('inventory');
-    if (activeConn) {
-      console.log('Found active inventory connection:', activeConn.name);
-      // Get full connection details including password
-      const fullConn = await connectionsStorage.getConnectionById(activeConn.id);
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
 
-      if (fullConn) {
-        console.log('Updating external database schema...');
-        await ensureExternalDbSchema(fullConn);
-      } else {
-        console.log('No full connection details found');
-      }
-    } else {
-      console.log('No active inventory connection found');
+  const pushField = () => {
+    row.push(field);
+    field = "";
+  };
+
+  const pushRow = () => {
+    // Ignore completely empty trailing rows
+    if (row.length === 1 && row[0] === "" && rows.length > 0) {
+      row = [];
+      return;
     }
-  } catch (error) {
-    console.error('Failed to ensure external DB schema:', error);
+    rows.push(row);
+    row = [];
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        const next = text[i + 1];
+        if (next === '"') {
+          field += '"';
+          i++;
+          continue;
+        }
+        inQuotes = false;
+        continue;
+      }
+      field += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (ch === ",") {
+      pushField();
+      continue;
+    }
+
+    if (ch === "\n") {
+      pushField();
+      pushRow();
+      continue;
+    }
+
+    if (ch === "\r") {
+      // handle CRLF
+      const next = text[i + 1];
+      if (next === "\n") {
+        // newline will be handled in next iteration; ignore CR
+        continue;
+      }
+      // standalone CR => treat as newline
+      pushField();
+      pushRow();
+      continue;
+    }
+
+    field += ch;
   }
 
-  // Search articles by normalized input
+  pushField();
+  if (row.length > 0) pushRow();
+
+  // Trim trailing empty rows
+  while (rows.length > 0 && rows[rows.length - 1].every((c) => c === "")) rows.pop();
+  return rows;
+}
+
+function pickRowValue(obj: Record<string, unknown>, keys: string[]): unknown {
+  for (const k of keys) {
+    if (obj[k] !== undefined) return obj[k];
+  }
+  return undefined;
+}
+
+function toStringOrEmpty(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
+function toIntOrZero(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(toStringOrEmpty(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.trunc(n);
+}
+
+function toOptString(v: unknown): string | undefined {
+  const s = toStringOrEmpty(v).trim();
+  return s ? s : undefined;
+}
+
+function parseBulkImportRowsFromObjects(rawRows: Array<Record<string, unknown>>): Array<BulkImportRow & { __row?: number }> {
+  return rawRows.map((obj, idx) => {
+    const smart = toStringOrEmpty(pickRowValue(obj, ["smart", "SMART"])).trim();
+    const qtyDelta = toIntOrZero(pickRowValue(obj, ["qty_delta", "qtyDelta", "qty"]));
+    const reason = toStringOrEmpty(pickRowValue(obj, ["reason", "type"])).trim();
+
+    const row: BulkImportRow & { __row?: number } = {
+      smart,
+      qtyDelta,
+      reason,
+    };
+
+    const note = toOptString(pickRowValue(obj, ["note", "comment", "примечание"]));
+    if (note) row.note = note;
+
+    const purchasePrice = toOptString(pickRowValue(obj, ["purchase_price", "purchasePrice"]));
+    if (purchasePrice) row.purchasePrice = purchasePrice;
+
+    const salePrice = toOptString(pickRowValue(obj, ["sale_price", "salePrice"]));
+    if (salePrice) row.salePrice = salePrice;
+
+    const deliveryPrice = toOptString(pickRowValue(obj, ["delivery_price", "deliveryPrice"]));
+    if (deliveryPrice) row.deliveryPrice = deliveryPrice;
+
+    const boxNumber = toOptString(pickRowValue(obj, ["box_number", "boxNumber"]));
+    if (boxNumber) row.boxNumber = boxNumber;
+
+    const trackNumber = toOptString(pickRowValue(obj, ["track_number", "trackNumber"]));
+    if (trackNumber) row.trackNumber = trackNumber;
+
+    const shippingMethodId = pickRowValue(obj, ["shipping_method_id", "shippingMethodId"]);
+    const shippingMethodIdNum = toIntOrZero(shippingMethodId);
+    if (shippingMethodId !== undefined && shippingMethodIdNum > 0) row.shippingMethodId = shippingMethodIdNum;
+
+    // Keep original row number (1-based, excluding headers) if provided by the caller.
+    row.__row = (obj as any).__row ?? idx + 2;
+
+    return row;
+  });
+}
+
+export async function registerRoutes(app: Express, ctx: AppContext): Promise<Server> {
+  const { storage } = ctx;
+
   app.get("/api/articles/search", async (req, res) => {
     try {
-      const { query } = req.query;
-      if (!query || typeof query !== 'string') {
+      const query = req.query.query;
+      if (!query || typeof query !== "string") {
         return res.status(400).json({ error: "Query parameter is required" });
       }
 
@@ -49,452 +174,361 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!normalized || normalized.length < 2) {
         return res.status(400).json({ error: "Query parameter is too short" });
       }
-      const matches = await storage.searchSmart(normalized);
-      
-      // Get total stock by SMART code (aggregated across all article variants)
-      // Use batch method to get all stock levels in one DB query
-      const smartCodes = matches.map(m => m.smart);
+
+      const matches = storage.searchSmart(normalized);
+      const smartCodes = matches.map((m) => m.smart);
       const stockMap = await storage.getTotalStockBySmartBatch(smartCodes);
-      
-      // Normalize brand and description to always be arrays (or undefined)
-      // Database has these as text fields, but frontend expects arrays
-      const toArray = (value: any): string[] | undefined => {
-        if (!value) return undefined;
-        if (Array.isArray(value)) return value;
-        if (typeof value === 'string') return [value];
-        return undefined;
-      };
-      
-      const results = matches.map(match => ({
-        smart: match.smart,
-        articles: Array.isArray(match.articles) ? match.articles : [],
-        brand: toArray(match.brand),
-        description: toArray(match.description),
-        name: match.name,
-        currentStock: stockMap.get(match.smart) || 0,
-      }));
 
-      res.json(results);
-    } catch (error) {
-      console.error("Search error:", error);
-      res.status(500).json({ error: "Failed to search articles" });
+      res.json(
+        matches.map((m) => ({
+          ...m,
+          currentStock: stockMap.get(m.smart) ?? 0,
+        }))
+      );
+    } catch (err) {
+      console.error("Search error:", err);
+      res.status(500).json({ error: "Failed to search" });
     }
   });
 
-  // Get SMART details by code
-  app.get("/api/smart/:code", async (req, res) => {
-    try {
-      const { code } = req.params;
-      const smart = await storage.getSmartByCode(code);
-      
-      if (!smart) {
-        return res.status(404).json({ error: "SMART code not found" });
-      }
-
-      res.json(smart);
-    } catch (error) {
-      console.error("Get SMART error:", error);
-      res.status(500).json({ error: "Failed to get SMART details" });
-    }
+  app.get("/api/smart/:code", (req, res) => {
+    const smart = storage.getSmartByCode(req.params.code);
+    if (!smart) return res.status(404).json({ error: "SMART code not found" });
+    res.json(smart);
   });
 
-  // Create movement
   app.post("/api/movements", async (req, res) => {
     try {
-      const validatedData = insertMovementSchema.parse(req.body);
-      
-      // Validate quantity direction based on reason type
-      // Note: 'return' movements are created automatically via sold items page, not this endpoint
-      if (validatedData.reason === 'purchase' && validatedData.qtyDelta <= 0) {
-        return res.status(400).json({ error: "Для покупки количество должно быть положительным" });
+      const validated = insertMovementSchema.parse(req.body);
+      if (validated.reason === "return") {
+        return res.status(400).json({ error: "Возврат создается только через страницу проданных товаров" });
       }
-      if (validatedData.reason === 'return' && validatedData.qtyDelta <= 0) {
-        return res.status(400).json({ error: "Для возврата количество должно быть положительным" });
-      }
-      if ((validatedData.reason === 'sale' || validatedData.reason === 'writeoff') && validatedData.qtyDelta >= 0) {
-        return res.status(400).json({ error: "Для продажи/списания количество должно быть отрицательным" });
-      }
-      
-      const movement = await storage.createMovement(validatedData);
+
+      const movement = await storage.createMovement(validated);
       res.status(201).json(movement);
-    } catch (error) {
-      console.error("Create movement error:", error);
-      
-      // Handle insufficient stock error
-      if (error instanceof InsufficientStockError) {
-        return res.status(409).json({ 
-          error: error.message,
+    } catch (err) {
+      console.error("Create movement error:", err);
+
+      if (err instanceof InsufficientStockError) {
+        return res.status(409).json({
+          error: err.message,
           details: {
-            article: error.article,
-            smart: error.smart,
-            currentStock: error.currentStock,
-            requestedQty: error.requestedQty
-          }
+            smart: err.smart,
+            currentStock: err.currentStock,
+            requestedQty: err.requestedQty,
+          },
         });
       }
-      
-      // Handle other errors
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: "Failed to create movement" });
+
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
       }
+
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to create movement" });
     }
   });
 
-  // Get movements with pagination
-  app.get("/api/movements", async (req, res) => {
+  app.get("/api/movements", async (_req, res) => {
     try {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const offset = parseInt(req.query.offset as string) || 0;
-      
-      const movements = await storage.getMovements(limit, offset);
+      const movements = await storage.getMovements();
       res.json(movements);
-    } catch (error) {
-      console.error("Get movements error:", error);
+    } catch (err) {
+      console.error("Get movements error:", err);
       res.status(500).json({ error: "Failed to get movements" });
     }
   });
 
-  // Get movements by SMART and article
-  app.get("/api/movements/:smart/:article", async (req, res) => {
+  app.get("/api/stock", async (_req, res) => {
     try {
-      const { smart, article } = req.params;
-      const movements = await storage.getMovementsBySmartAndArticle(smart, article);
-      res.json(movements);
-    } catch (error) {
-      console.error("Get movements by SMART/article error:", error);
-      res.status(500).json({ error: "Failed to get movements" });
-    }
-  });
-
-  // Get stock levels with pagination
-  app.get("/api/stock", async (req, res) => {
-    try {
-      const limit = parseInt(req.query.limit as string) || 50;
-      const offset = parseInt(req.query.offset as string) || 0;
-      
-      const stock = await storage.getStockLevels(limit, offset);
+      const stock = await storage.getStockLevels();
       res.json(stock);
-    } catch (error) {
-      console.error("Get stock error:", error);
+    } catch (err) {
+      console.error("Get stock error:", err);
       res.status(500).json({ error: "Failed to get stock levels" });
     }
   });
 
-  // Get purchases by SMART code (MUST come before /api/stock/:smart/:article)
   app.get("/api/stock/:smart/purchases", async (req, res) => {
     try {
-      const { smart } = req.params;
-      const purchases = await storage.getPurchasesBySmart(smart);
+      const purchases = await storage.getPurchasesBySmart(req.params.smart);
       res.json(purchases);
-    } catch (error) {
-      console.error("Get purchases by SMART error:", error);
+    } catch (err) {
+      console.error("Get purchases error:", err);
       res.status(500).json({ error: "Failed to get purchases" });
     }
   });
 
-  // Get sales analytics by SMART code (MUST come before /api/stock/:smart/:article)
   app.get("/api/stock/:smart/sales", async (req, res) => {
     try {
-      const { smart } = req.params;
+      const smart = req.params.smart;
       const [sales, purchases] = await Promise.all([
         storage.getSalesBySmart(smart),
-        storage.getPurchasesBySmart(smart)
+        storage.getPurchasesBySmart(smart),
       ]);
-      
-      // Calculate metrics for each sale
-      const salesWithMetrics = sales.map(sale => {
-        // Find closest previous purchase for this sale
-        // IMPORTANT: Match by article first, then by time to get correct purchase price
-        const closestPurchase = purchases
-          .filter(p => p.article === sale.article && new Date(p.createdAt) < new Date(sale.createdAt))
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-        
-        const purchasePrice = parseFloat(closestPurchase?.purchasePrice || '0');
-        const salePrice = parseFloat(sale.salePrice || '0');
-        const deliveryPrice = parseFloat(sale.deliveryPrice || '0');
+
+      // Average purchase price must be computed across ALL purchases for SMART.
+      // Use weighted average by quantity (price-per-unit).
+      const purchaseLines = purchases
+        .map((p) => ({
+          price: p.purchasePrice ? Number(p.purchasePrice) : NaN,
+          qty: Math.abs(p.qtyDelta),
+        }))
+        .filter((l) => Number.isFinite(l.price) && l.qty > 0);
+
+      const totalPurchaseQty = purchaseLines.reduce((sum, l) => sum + l.qty, 0);
+      const totalPurchaseCostWeighted = purchaseLines.reduce((sum, l) => sum + l.price * l.qty, 0);
+      const avgPurchasePrice = totalPurchaseQty > 0 ? totalPurchaseCostWeighted / totalPurchaseQty : 0;
+
+      const salesWithMetrics = sales.map((sale) => {
+        const salePrice = sale.salePrice ? Number(sale.salePrice) : 0;
+        const deliveryPrice = sale.deliveryPrice ? Number(sale.deliveryPrice) : 0;
         const quantity = Math.abs(sale.qtyDelta);
-        
-        // Calculate profit (sale price - purchase price - delivery) × quantity
-        const profit = (salePrice - purchasePrice - deliveryPrice) * quantity;
-        
-        // Calculate profit margin percentage for this sale
-        const profitMarginPercent = purchasePrice > 0 
-          ? ((salePrice - purchasePrice - deliveryPrice) / purchasePrice) * 100 
-          : 0;
-        
-        // Calculate days from purchase to sale
-        const daysFromPurchase = closestPurchase 
-          ? Math.round((new Date(sale.createdAt).getTime() - new Date(closestPurchase.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+
+        const profitPerUnit = salePrice - avgPurchasePrice - deliveryPrice;
+        const profit = profitPerUnit * quantity;
+        const profitMarginPercent = avgPurchasePrice > 0 ? (profitPerUnit / avgPurchasePrice) * 100 : 0;
+
+        // Optional UX metric: closest previous purchase (by SMART only).
+        const closestPurchase = purchases
+          .filter((p) => new Date(p.createdAt) < new Date(sale.createdAt))
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+        const daysFromPurchase = closestPurchase
+          ? Math.round(
+              (new Date(sale.createdAt).getTime() - new Date(closestPurchase.createdAt).getTime()) / (1000 * 60 * 60 * 24)
+            )
           : null;
-        
+
         return {
           ...sale,
           profit,
           profitMarginPercent,
           daysFromPurchase,
-          purchasePriceUsed: purchasePrice
+          purchasePriceUsed: avgPurchasePrice,
         };
       });
-      
-      // Calculate summary metrics
-      const totalSold = salesWithMetrics.reduce((sum, sale) => sum + Math.abs(sale.qtyDelta), 0);
-      const totalPurchased = purchases.reduce((sum, purchase) => sum + purchase.qtyDelta, 0);
+
+      const totalSold = salesWithMetrics.reduce((sum, s) => sum + Math.abs(s.qtyDelta), 0);
+      const totalPurchased = purchases.reduce((sum, p) => sum + Math.abs(p.qtyDelta), 0);
       const sellThroughRate = totalPurchased > 0 ? (totalSold / totalPurchased) * 100 : 0;
-      
-      const salesWithDays = salesWithMetrics.filter(s => s.daysFromPurchase !== null);
-      const averageDaysToSell = salesWithDays.length > 0
-        ? salesWithDays.reduce((sum, sale) => sum + (sale.daysFromPurchase || 0), 0) / salesWithDays.length
-        : 0;
-      
-      const totalProfit = salesWithMetrics.reduce((sum, sale) => sum + sale.profit, 0);
+
+      const salesWithDays = salesWithMetrics.filter((s) => s.daysFromPurchase !== null);
+      const averageDaysToSell =
+        salesWithDays.length > 0
+          ? salesWithDays.reduce((sum, s) => sum + (s.daysFromPurchase || 0), 0) / salesWithDays.length
+          : 0;
+
+      const totalProfit = salesWithMetrics.reduce((sum, s) => sum + s.profit, 0);
       const averageProfitPerUnit = totalSold > 0 ? totalProfit / totalSold : 0;
-      
-      // Calculate true profit margin: (total profit / total cost) × 100
-      // Total cost = sum of (purchase price × quantity) for all sales
-      const totalPurchaseCost = salesWithMetrics.reduce((sum, sale) => {
-        return sum + (sale.purchasePriceUsed * Math.abs(sale.qtyDelta));
-      }, 0);
-      
-      const averageProfitMarginPercent = totalPurchaseCost > 0
-        ? (totalProfit / totalPurchaseCost) * 100
-        : 0;
-      
+
+      const totalPurchaseCost = avgPurchasePrice * totalSold;
+      const averageProfitMarginPercent = totalPurchaseCost > 0 ? (totalProfit / totalPurchaseCost) * 100 : 0;
+
       res.json({
         sales: salesWithMetrics,
         metrics: {
-          averageDaysToSell: Math.round(averageDaysToSell * 10) / 10, // Round to 1 decimal
+          averageDaysToSell: Math.round(averageDaysToSell * 10) / 10,
           soldQuantity: totalSold,
           totalPurchased,
           sellThroughRate: Math.round(sellThroughRate * 10) / 10,
-          averageProfitPerUnit: Math.round(averageProfitPerUnit * 100) / 100, // Round to 2 decimals
-          averageProfitMarginPercent: Math.round(averageProfitMarginPercent * 10) / 10
-        }
+          averageProfitPerUnit: Math.round(averageProfitPerUnit * 100) / 100,
+          averageProfitMarginPercent: Math.round(averageProfitMarginPercent * 10) / 10,
+        },
       });
-    } catch (error) {
-      console.error("Get sales analytics error:", error);
+    } catch (err) {
+      console.error("Get sales analytics error:", err);
       res.status(500).json({ error: "Failed to get sales analytics" });
     }
   });
 
-  // Get stock by SMART and article
-  app.get("/api/stock/:smart/:article", async (req, res) => {
+  // Stock details (must return 0 stock if existed, 404 only if never existed)
+  app.get("/api/stock/:smart", async (req, res) => {
     try {
-      const { smart, article } = req.params;
-      const stock = await storage.getStockBySmartAndArticle(smart, article);
-      
-      if (!stock) {
-        return res.status(404).json({ error: "Stock not found" });
-      }
-
-      res.json(stock);
-    } catch (error) {
-      console.error("Get stock by SMART/article error:", error);
-      res.status(500).json({ error: "Failed to get stock" });
+      const info = await storage.getStockBySmart(req.params.smart);
+      if (!info.existed) return res.status(404).json({ error: "SMART code not found in inventory history" });
+      // Drop helper field from response
+      const { existed, ...payload } = info;
+      res.json(payload);
+    } catch (err) {
+      console.error("Get stock details error:", err);
+      res.status(500).json({ error: "Failed to get stock details" });
     }
   });
 
-  // Update movement (purchase price, note, quantity, box number)
   app.patch("/api/movements/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id, 10);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-      const { purchasePrice, note, qtyDelta, boxNumber } = req.body;
-      
-      const updates: Partial<{purchasePrice: string | null; note: string | null; qtyDelta: number; boxNumber: string | null}> = {};
-      
-      if (purchasePrice !== undefined) {
-        updates.purchasePrice = purchasePrice;
-      }
-      
-      if (note !== undefined) {
-        updates.note = note;
-      }
-      
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+
+      const { purchasePrice, note, qtyDelta, boxNumber } = req.body as Record<string, unknown>;
+
+      const updates: any = {};
+
+      if (purchasePrice !== undefined) updates.purchasePrice = purchasePrice;
+      if (note !== undefined) updates.note = note;
+      if (boxNumber !== undefined) updates.boxNumber = boxNumber;
+
       if (qtyDelta !== undefined) {
-        if (!Number.isFinite(qtyDelta) || qtyDelta <= 0) {
+        const n = typeof qtyDelta === "number" ? qtyDelta : Number(qtyDelta);
+        if (!Number.isFinite(n) || n <= 0) {
           return res.status(400).json({ error: "Quantity must be a positive number" });
         }
-        updates.qtyDelta = qtyDelta;
+        updates.qtyDelta = Math.trunc(n);
       }
-      
-      if (boxNumber !== undefined) {
-        updates.boxNumber = boxNumber;
-      }
-      
-      const updatedMovement = await storage.updateMovement(id, updates);
-      res.json(updatedMovement);
-    } catch (error) {
-      console.error("Update movement error:", error);
 
-      if (error instanceof InsufficientStockError) {
+      const movement = await storage.updateMovement(id, updates);
+      res.json(movement);
+    } catch (err) {
+      console.error("Update movement error:", err);
+
+      if (err instanceof InsufficientStockError) {
         return res.status(409).json({
-          error: error.message,
-          details: {
-            article: error.article,
-            smart: error.smart,
-            currentStock: error.currentStock,
-            requestedQty: error.requestedQty,
-          },
+          error: err.message,
+          details: { smart: err.smart, currentStock: err.currentStock, requestedQty: err.requestedQty },
         });
       }
 
-      if (error instanceof Error) {
-        if (error.message === "Movement not found") {
-          return res.status(404).json({ error: error.message });
-        }
-        return res.status(400).json({ error: error.message });
+      if (err instanceof Error && err.message === "Movement not found") {
+        return res.status(404).json({ error: err.message });
       }
 
-      res.status(500).json({ error: "Failed to update movement" });
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to update movement" });
     }
   });
 
-  // Get reasons
-  app.get("/api/reasons", async (req, res) => {
+  app.get("/api/reasons", async (_req, res) => {
     try {
       const reasons = await storage.getReasons();
       res.json(reasons);
-    } catch (error) {
-      console.error("Get reasons error:", error);
+    } catch (err) {
+      console.error("Get reasons error:", err);
       res.status(500).json({ error: "Failed to get reasons" });
     }
   });
 
-  // Get shipping methods
-  app.get("/api/shipping-methods", async (req, res) => {
+  app.get("/api/shipping-methods", async (_req, res) => {
     try {
       const methods = await storage.getShippingMethods();
       res.json(methods);
-    } catch (error) {
-      console.error("Get shipping methods error:", error);
+    } catch (err) {
+      console.error("Get shipping methods error:", err);
       res.status(500).json({ error: "Failed to get shipping methods" });
     }
   });
 
-  // Create shipping method
   app.post("/api/shipping-methods", async (req, res) => {
     try {
-      const { name } = req.body;
-      if (!name || typeof name !== 'string') {
-        return res.status(400).json({ error: "Name is required" });
-      }
-      
+      const name = req.body?.name;
+      if (!name || typeof name !== "string") return res.status(400).json({ error: "Name is required" });
       const method = await storage.createShippingMethod({ name });
       res.status(201).json(method);
-    } catch (error) {
-      console.error("Create shipping method error:", error);
+    } catch (err) {
+      console.error("Create shipping method error:", err);
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
       res.status(500).json({ error: "Failed to create shipping method" });
     }
   });
 
-  // Delete shipping method
   app.delete("/api/shipping-methods/:id", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-      
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
       await storage.deleteShippingMethod(id);
       res.status(204).send();
-    } catch (error) {
-      console.error("Delete shipping method error:", error);
+    } catch (err) {
+      console.error("Delete shipping method error:", err);
       res.status(500).json({ error: "Failed to delete shipping method" });
     }
   });
 
-  // Update movement sale status
   app.patch("/api/movements/:id/status", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-      
-      const { status } = req.body;
-      if (status !== 'awaiting_shipment' && status !== 'shipped') {
-        return res.status(400).json({ error: "Invalid status. Must be 'awaiting_shipment' or 'shipped'" });
-      }
-      
-      const movement = await storage.updateMovementSaleStatus(id, status);
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+
+      const status = req.body?.status;
+      const parsed = saleStatusSchema.safeParse(status);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid status" });
+
+      const movement = await storage.updateMovementSaleStatus(id, parsed.data);
       res.json(movement);
-    } catch (error) {
-      console.error("Update movement status error:", error);
-      res.status(500).json({ error: "Failed to update movement status" });
+    } catch (err) {
+      console.error("Update movement status error:", err);
+      if (err instanceof Error && err.message === "Movement not found") {
+        return res.status(404).json({ error: err.message });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to update movement status" });
     }
   });
 
-  // Mark sale as shipped
   app.patch("/api/movements/:id/ship", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-      
-      const movement = await storage.updateMovementSaleStatus(id, 'shipped');
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+      const movement = await storage.updateMovementSaleStatus(id, "shipped");
       res.json(movement);
-    } catch (error) {
-      console.error("Mark as shipped error:", error);
-      res.status(500).json({ error: "Failed to mark as shipped" });
+    } catch (err) {
+      console.error("Mark as shipped error:", err);
+      if (err instanceof Error && err.message === "Movement not found") {
+        return res.status(404).json({ error: err.message });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to mark as shipped" });
     }
   });
 
-  // Get sold out items (zero stock but had sales)
-  app.get("/api/sold-out", async (req, res) => {
+  app.get("/api/sold-out", async (_req, res) => {
     try {
       const items = await storage.getSoldOutItems();
       res.json(items);
-    } catch (error) {
-      console.error("Get sold out items error:", error);
+    } catch (err) {
+      console.error("Get sold out items error:", err);
       res.status(500).json({ error: "Failed to get sold out items" });
     }
   });
 
-  // Get top parts ranking
   app.get("/api/top-parts", async (req, res) => {
     try {
-      const mode = req.query.mode as 'profit' | 'sales' | 'combined';
-      if (!mode || !['profit', 'sales', 'combined'].includes(mode)) {
+      const mode = req.query.mode;
+      if (mode !== "profit" && mode !== "sales" && mode !== "combined") {
         return res.status(400).json({ error: "Invalid mode. Must be 'profit', 'sales', or 'combined'" });
       }
-      
       const items = await storage.getTopParts(mode);
       res.json(items);
-    } catch (error) {
-      console.error("Get top parts error:", error);
+    } catch (err) {
+      console.error("Get top parts error:", err);
       res.status(500).json({ error: "Failed to get top parts" });
     }
   });
 
-  // Return sold item to inventory
   app.post("/api/movements/:id/return", async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      if (isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-      
-      // Get original sale movement
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+
       const saleMovement = await storage.getMovementById(id);
-      if (!saleMovement) {
-        return res.status(404).json({ error: "Movement not found" });
-      }
-      
-      if (saleMovement.reason !== 'sale') {
-        return res.status(400).json({ error: "Can only return sales" });
-      }
-      
-      // Create return movement (positive qty to add back to inventory)
+      if (!saleMovement) return res.status(404).json({ error: "Movement not found" });
+      if (saleMovement.reason !== "sale") return res.status(400).json({ error: "Can only return sales" });
+
       const returnMovement = await storage.createMovement({
         smart: saleMovement.smart,
-        article: saleMovement.article,
-        qtyDelta: Math.abs(saleMovement.qtyDelta), // Make positive
-        reason: 'return',
+        qtyDelta: Math.abs(saleMovement.qtyDelta),
+        reason: "return",
         note: `Возврат продажи #${id}`,
         purchasePrice: null,
         salePrice: null,
@@ -504,315 +538,154 @@ export async function registerRoutes(app: Express): Promise<Server> {
         shippingMethodId: null,
         saleStatus: null,
       });
-      
+
       res.status(201).json(returnMovement);
-    } catch (error) {
-      console.error("Return to inventory error:", error);
-      
-      if (error instanceof InsufficientStockError) {
-        return res.status(409).json({ 
-          error: "Недостаточно товара на складе",
-          details: {
-            article: error.article,
-            smart: error.smart,
-            currentStock: error.currentStock,
-            requested: error.requestedQty,
-          }
-        });
+    } catch (err) {
+      console.error("Return to inventory error:", err);
+      if (err instanceof Error && err.message === "Товар уже возвращен на склад") {
+        return res.status(409).json({ error: err.message });
       }
-      
-      // Check for duplicate return error
-      if (error instanceof Error && error.message === 'Товар уже возвращен на склад') {
-        return res.status(409).json({ error: error.message });
-      }
-      
-      res.status(500).json({ error: "Failed to return to inventory" });
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to return to inventory" });
     }
   });
 
-  // Bulk import
-  app.post("/api/bulk-import", upload.single('file'), async (req, res) => {
+  app.post("/api/bulk-import", upload.single("file"), async (req: Request, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      let rows: BulkImportRow[] = [];
+      let rows: Array<BulkImportRow & { __row?: number }> = [];
 
-      // Parse file based on type
-      if (req.file.mimetype.includes('sheet') || req.file.originalname?.endsWith('.xlsx') || req.file.originalname?.endsWith('.xls')) {
-        // Excel file
-        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const isExcel =
+        req.file.mimetype.includes("sheet") ||
+        req.file.originalname?.toLowerCase().endsWith(".xlsx") ||
+        req.file.originalname?.toLowerCase().endsWith(".xls");
+      const isCsv = req.file.mimetype.includes("csv") || req.file.originalname?.toLowerCase().endsWith(".csv");
+
+      if (isExcel) {
+        const workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          return res.status(400).json({ error: "Empty Excel file (no sheets)" });
+        }
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const rawRows = XLSX.utils.sheet_to_json(worksheet) as any[];
-        
-        // Convert Excel rows to BulkImportRow format (handle both snake_case and camelCase)
-        rows = rawRows.map(row => ({
-          article: row.article || '',
-          qtyDelta: parseInt(row.qty_delta || row.qtyDelta) || 0,
-          reason: row.reason || '',
-          note: row.note || undefined,
-          smart: row.smart || undefined,
-        })).filter(row => row.article && row.qtyDelta && row.reason);
-      } else if (req.file.mimetype.includes('csv') || req.file.originalname?.endsWith('.csv')) {
-        // CSV file
-        const csvText = req.file.buffer.toString('utf-8');
-        const lines = csvText.split('\n').filter(line => line.trim());
-        if (lines.length === 0) {
-          return res.status(400).json({ error: "Empty CSV file" });
+        if (!worksheet) {
+          return res.status(400).json({ error: "Empty Excel file" });
         }
-        const headers = lines[0].split(',').map(h => h.trim());
-        
-        for (let i = 1; i < lines.length; i++) {
-          const values = lines[i].split(',').map(v => v.trim());
-          const row: any = {};
-          headers.forEach((header, index) => {
-            row[header] = values[index] || '';
-          });
-          
-          const qtyDelta = parseInt(row.qty_delta || row.qtyDelta) || 0;
-          
-          if (row.article && qtyDelta && row.reason) {
-            rows.push({
-              article: row.article,
-              qtyDelta: qtyDelta,
-              reason: row.reason,
-              note: row.note || undefined,
-              smart: row.smart || undefined,
-            });
+
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" }) as Record<string, unknown>[];
+        if (rawRows.length === 0) {
+          return res.status(400).json({ error: "Empty Excel sheet" });
+        }
+
+        // Add 1-based excel row numbers (header row is 1)
+        const withRow = rawRows.map((r, idx) => ({ ...r, __row: idx + 2 }));
+        rows = parseBulkImportRowsFromObjects(withRow);
+      } else if (isCsv) {
+        const csvText = req.file.buffer.toString("utf-8");
+        const table = parseCsv(csvText);
+        if (table.length === 0) return res.status(400).json({ error: "Empty CSV file" });
+
+        const headers = table[0].map((h) => h.trim());
+        const rawObjects: Record<string, unknown>[] = [];
+        for (let i = 1; i < table.length; i++) {
+          const values = table[i];
+          if (values.every((v) => !v || !String(v).trim())) continue;
+
+          const obj: Record<string, unknown> = { __row: i + 1 };
+          for (let c = 0; c < headers.length; c++) {
+            obj[headers[c]] = values[c] ?? "";
           }
+          rawObjects.push(obj);
         }
+
+        rows = parseBulkImportRowsFromObjects(rawObjects);
       } else {
         return res.status(400).json({ error: "Unsupported file type" });
       }
 
-      // Process bulk import
-      const result = await storage.processBulkImport(rows);
+      const normalizedRows = rows.map((r) => ({
+        ...r,
+        smart: typeof r.smart === "string" ? r.smart.trim() : r.smart,
+        reason: typeof r.reason === "string" ? r.reason.trim() : r.reason,
+      }));
+
+      const result = await storage.processBulkImport(normalizedRows);
       res.json(result);
-    } catch (error) {
-      console.error("Bulk import error:", error);
+    } catch (err: any) {
+      // Multer file-size limit
+      if (err && typeof err === "object" && (err as any).code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: `File too large. Max ${MAX_IMPORT_FILE_BYTES} bytes.` });
+      }
+      console.error("Bulk import error:", err);
       res.status(500).json({ error: "Failed to process bulk import" });
     }
   });
 
-  // Download import template
-  app.get("/api/import-template", (req, res) => {
+  app.get("/api/import-template", (_req, res) => {
     const templateData = [
-      { article: 'ABC-123', qty_delta: 10, reason: 'purchase', note: 'Example purchase', smart: '' },
-      { article: 'DEF-456', qty_delta: -5, reason: 'sale', note: 'Example sale', smart: 'SMART-00123' },
+      { smart: "smart_17713", qty_delta: 10, reason: "purchase", purchase_price: 100.0, box_number: "K-123", note: "Example purchase" },
+      { smart: "smart_17713", qty_delta: -1, reason: "sale", sale_price: 250.0, delivery_price: 0.0, shipping_method_id: 1, note: "Example sale" },
+      { smart: "smart_17713", qty_delta: -1, reason: "writeoff", note: "Example writeoff" },
+      { smart: "smart_17713", qty_delta: 2, reason: "adjust", purchase_price: 120.0, note: "Пересчет склада, нашли лишние" },
     ];
 
     const ws = XLSX.utils.json_to_sheet(templateData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Import Template');
-    
-    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    
-    res.setHeader('Content-Disposition', 'attachment; filename="inventory-import-template.xlsx"');
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    XLSX.utils.book_append_sheet(wb, ws, "Import Template");
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", 'attachment; filename="inventory-import-template.xlsx"');
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.send(buffer);
   });
 
-  // Dashboard stats
-  app.get("/api/dashboard/stats", async (req, res) => {
+  app.get("/api/dashboard/stats", async (_req, res) => {
     try {
-      // This would need custom queries to get actual stats
-      // For now, return basic structure
-      const movements = await storage.getMovements(1000, 0);
-      const stockLevels = await storage.getStockLevels(1000, 0);
-      
-      const stats = {
-        totalArticles: stockLevels.length,
-        inStock: stockLevels.filter(s => s.totalQty > 0).length,
-        movementsToday: movements.filter(m => {
-          const today = new Date();
-          const movementDate = new Date(m.createdAt);
-          return movementDate.toDateString() === today.toDateString();
-        }).length,
-        lowStockAlerts: stockLevels.filter(s => s.totalQty > 0 && s.totalQty <= 10).length,
-      };
-      
-      res.json(stats);
-    } catch (error) {
-      console.error("Dashboard stats error:", error);
-      res.status(500).json({ error: "Failed to get dashboard stats" });
-    }
-  });
+      // Use SQL aggregation (no artificial limits, no full-table fetch to JS).
+      const stats = await ctx.pools.inventoryPool.query<{
+        total_articles: string;
+        in_stock: string;
+        movements_today: string;
+        low_stock_alerts: string;
+      }>(`
+        WITH
+          totals AS (
+            SELECT COUNT(DISTINCT smart)::text as total_articles
+            FROM inventory.movements
+          ),
+          in_stock AS (
+            SELECT COUNT(*)::text as in_stock
+            FROM inventory.stock
+          ),
+          movements_today AS (
+            SELECT COUNT(*)::text as movements_today
+            FROM inventory.movements
+            WHERE created_at::date = CURRENT_DATE
+          ),
+          low_stock AS (
+            SELECT COUNT(*)::text as low_stock_alerts
+            FROM inventory.stock
+            WHERE total_qty::bigint > 0 AND total_qty::bigint <= 10
+          )
+        SELECT
+          (SELECT total_articles FROM totals) as total_articles,
+          (SELECT in_stock FROM in_stock) as in_stock,
+          (SELECT movements_today FROM movements_today) as movements_today,
+          (SELECT low_stock_alerts FROM low_stock) as low_stock_alerts
+      `);
 
-  // Database connections management
-  app.get("/api/db-connections", async (req, res) => {
-    try {
-      const connections = await storage.getDbConnections();
-      // Password is already removed by storage layer
-      res.json(connections);
-    } catch (error) {
-      console.error("Get DB connections error:", error);
-      res.status(500).json({ error: "Failed to get database connections" });
-    }
-  });
-
-  app.post("/api/db-connections", async (req, res) => {
-    try {
-      const connection = await storage.createDbConnection(req.body);
-      // Password is already removed by storage layer
-      res.status(201).json(connection);
-    } catch (error) {
-      console.error("Create DB connection error:", error);
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: "Failed to create database connection" });
-      }
-    }
-  });
-
-  app.delete("/api/db-connections/:id", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      await storage.deleteDbConnection(id);
-      res.status(204).send();
-    } catch (error) {
-      console.error("Delete DB connection error:", error);
-      res.status(500).json({ error: "Failed to delete database connection" });
-    }
-  });
-
-  app.post("/api/db-connections/test", async (req, res) => {
-    try {
-      const result = await storage.testDbConnection(req.body);
-      res.json(result);
-    } catch (error) {
-      console.error("Test DB connection error:", error);
-      if (error instanceof Error) {
-        res.status(400).json({ success: false, message: error.message });
-      } else {
-        res.status(500).json({ success: false, message: "Failed to test connection" });
-      }
-    }
-  });
-
-  app.post("/api/db-connections/:id/tables", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const result = await storage.getDbTables(id);
-      res.json(result);
-    } catch (error) {
-      console.error("Get DB tables error:", error);
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: "Failed to get tables" });
-      }
-    }
-  });
-
-  app.post("/api/db-connections/:id/configure", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id, 10);
-      if (Number.isNaN(id)) {
-        return res.status(400).json({ error: "Invalid ID" });
-      }
-
-      const { role, tableName, fieldMapping } = req.body as {
-        role: unknown;
-        tableName: unknown;
-        fieldMapping: unknown;
-      };
-
-      if (role !== null && role !== "smart" && role !== "inventory") {
-        return res.status(400).json({ error: "Invalid role" });
-      }
-
-      if (!tableName || typeof tableName !== "string") {
-        return res.status(400).json({ error: "tableName is required" });
-      }
-
-      if (!fieldMapping || typeof fieldMapping !== "object") {
-        return res.status(400).json({ error: "fieldMapping is required" });
-      }
-
-      const requireNonEmpty = (obj: Record<string, unknown>, keys: string[]) => {
-        const missing = keys.filter((k) => typeof obj[k] !== "string" || !(obj[k] as string).trim());
-        return missing;
-      };
-
-      const mappingObj = fieldMapping as Record<string, unknown>;
-      if (role === "smart") {
-        const missing = requireNonEmpty(mappingObj, ["smart", "articles"]);
-        if (missing.length > 0) {
-          return res.status(400).json({ error: `Missing fieldMapping keys: ${missing.join(", ")}` });
-        }
-      }
-      if (role === "inventory") {
-        const missing = requireNonEmpty(mappingObj, ["id", "smart", "article", "qtyDelta", "reason", "createdAt"]);
-        if (missing.length > 0) {
-          return res.status(400).json({ error: `Missing fieldMapping keys: ${missing.join(", ")}` });
-        }
-      }
-
-      // If user is activating an inventory connection, make sure the target DB schema exists first.
-      if (role === "inventory") {
-        const fullConn = await connectionsStorage.getConnectionById(id);
-        if (!fullConn) {
-          return res.status(404).json({ error: "Connection not found" });
-        }
-        await ensureExternalDbSchema(fullConn);
-      }
-      
-      const result = await storage.configureConnection({
-        connectionId: id,
-        role: role as "smart" | "inventory" | null,
-        tableName,
-        fieldMapping: fieldMapping as any,
+      const row = stats.rows[0];
+      res.json({
+        totalArticles: Number(row?.total_articles || 0),
+        inStock: Number(row?.in_stock || 0),
+        movementsToday: Number(row?.movements_today || 0),
+        lowStockAlerts: Number(row?.low_stock_alerts || 0),
       });
-      
-      res.json(result);
-    } catch (error) {
-      console.error("Configure connection error:", error);
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: "Failed to configure connection" });
-      }
-    }
-  });
-
-  app.get("/api/db-connections/:id/columns", async (req, res) => {
-    try {
-      const id = parseInt(req.params.id);
-      const { tableName } = req.query;
-      
-      if (!tableName || typeof tableName !== 'string') {
-        return res.status(400).json({ error: "tableName query parameter is required" });
-      }
-      
-      const columns = await storage.getTableColumns(id, tableName);
-      // Keep API contract in sync with `DbColumnsResult` (shared/schema.ts): string[]
-      res.json({ columns: columns.map((c: any) => c?.name).filter((n: any) => typeof n === "string") });
-    } catch (error) {
-      console.error("Get table columns error:", error);
-      if (error instanceof Error) {
-        res.status(400).json({ error: error.message });
-      } else {
-        res.status(500).json({ error: "Failed to get columns" });
-      }
-    }
-  });
-
-  app.get("/api/db-connections/active/:role", async (req, res) => {
-    try {
-      const { role } = req.params;
-      
-      if (role !== 'smart' && role !== 'inventory') {
-        return res.status(400).json({ error: "Invalid role" });
-      }
-      
-      const connection = await storage.getActiveConnection(role);
-      res.json(connection);
-    } catch (error) {
-      console.error("Get active connection error:", error);
-      res.status(500).json({ error: "Failed to get active connection" });
+    } catch (err) {
+      console.error("Dashboard stats error:", err);
+      res.status(500).json({ error: "Failed to get dashboard stats" });
     }
   });
 

@@ -1,10 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -15,67 +14,92 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { insertMovementSchema } from "@shared/schema";
-import type { InsertMovement, Reason, ArticleSearchResult } from "@shared/schema";
+import type { ArticleSearchResult, InsertMovement, Reason } from "@shared/schema";
 import { z } from "zod";
-import { DisambiguationModal } from "@/components/disambiguation-modal";
 import { Check } from "lucide-react";
 
-const formSchema = insertMovementSchema.extend({
-  qtyDelta: z.number().int().min(-999999).max(999999).refine((val) => val !== 0, {
-    message: "Количество не может быть равно 0",
-  }),
-}).superRefine((data, ctx) => {
-  // Validate quantity direction based on reason type
-  // Note: 'return' is not shown in form (only via sold items), but validation kept for safety
-  if (data.reason === 'purchase') {
-    if (data.qtyDelta <= 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Для покупки количество должно быть положительным",
-        path: ["qtyDelta"],
-      });
+const formSchema = insertMovementSchema
+  .extend({
+    qtyDelta: z
+      .number()
+      .int()
+      .min(-999999)
+      .max(999999)
+      .refine((val) => val !== 0, { message: "Количество не может быть равно 0" }),
+  })
+  .superRefine((data, ctx) => {
+    // Quantity direction rules
+    if (data.reason === "purchase" && data.qtyDelta <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Для покупки количество должно быть положительным", path: ["qtyDelta"] });
     }
-  }
-  if (data.reason === 'sale' || data.reason === 'writeoff') {
-    if (data.qtyDelta >= 0) {
+    if ((data.reason === "sale" || data.reason === "writeoff") && data.qtyDelta >= 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Для продажи/списания количество должно быть отрицательным",
         path: ["qtyDelta"],
       });
     }
-  }
-});
+
+    // Required fields by reason (specification.md)
+    const nonEmpty = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+    const isNum = (v: unknown) => nonEmpty(v) && Number.isFinite(Number(v));
+
+    if (data.reason === "purchase") {
+      if (!isNum(data.purchasePrice)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена закупки обязательна", path: ["purchasePrice"] });
+      }
+      if (!nonEmpty(data.boxNumber)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Номер коробки обязателен", path: ["boxNumber"] });
+      }
+    }
+
+    if (data.reason === "sale") {
+      if (!isNum(data.salePrice)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена продажи обязательна", path: ["salePrice"] });
+      }
+      // delivery can be 0, but must be present and numeric
+      if (!isNum(data.deliveryPrice)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Стоимость доставки обязательна", path: ["deliveryPrice"] });
+      }
+      if (!data.shippingMethodId) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Способ доставки обязателен", path: ["shippingMethodId"] });
+      }
+    }
+
+    if (data.reason === "adjust") {
+      if (!nonEmpty(data.note)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Примечание обязательно для корректировки", path: ["note"] });
+      }
+      if (nonEmpty(data.purchasePrice) && !isNum(data.purchasePrice)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена за единицу должна быть числом", path: ["purchasePrice"] });
+      }
+    }
+  });
 
 type FormData = z.infer<typeof formSchema>;
 
 export default function AddMovement() {
-  const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([]);
-  const [showDisambiguation, setShowDisambiguation] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [lastSearchedArticle, setLastSearchedArticle] = useState<string>("");
-  const [hasPrefilled, setHasPrefilled] = useState(false);
-  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
-  const [autocompleteResults, setAutocompleteResults] = useState<ArticleSearchResult[]>([]);
-  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
-  const [location] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [location] = useLocation();
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [autocompleteResults, setAutocompleteResults] = useState<ArticleSearchResult[]>([]);
+  const [selectedItem, setSelectedItem] = useState<ArticleSearchResult | null>(null);
+  const [hasPrefilled, setHasPrefilled] = useState(false);
+
+  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   const clearPrefillParamsFromUrl = () => {
     const searchParams = new URLSearchParams(window.location.search);
     const hadSmart = searchParams.has("smart");
-    const hadArticle = searchParams.has("article");
-    if (!hadSmart && !hadArticle) return;
+    if (!hadSmart) return;
 
     searchParams.delete("smart");
-    searchParams.delete("article");
-
     const nextSearch = searchParams.toString();
-    const nextUrl =
-      window.location.pathname +
-      (nextSearch ? `?${nextSearch}` : "") +
-      window.location.hash;
+    const nextUrl = window.location.pathname + (nextSearch ? `?${nextSearch}` : "") + window.location.hash;
     window.history.replaceState(null, "", nextUrl);
   };
 
@@ -83,7 +107,6 @@ export default function AddMovement() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       smart: "",
-      article: "",
       qtyDelta: 0,
       reason: undefined as any,
       note: "",
@@ -97,162 +120,175 @@ export default function AddMovement() {
     },
   });
 
-  // Pre-fill form from URL parameters
+  // Prefill by SMART from URL (only `smart` is supported by spec).
   useEffect(() => {
-    // Use window.location.search because wouter's location doesn't include query string
     const searchParams = new URLSearchParams(window.location.search);
-    const smart = searchParams.get('smart');
-    const article = searchParams.get('article');
-    
-    // Only prefill if both params exist and haven't already prefilled
-    if (smart && article && !hasPrefilled) {
-      form.reset({
-        smart,
-        article,
-        qtyDelta: 0,
-        reason: undefined as any,
-        note: "",
-        purchasePrice: null,
-        salePrice: null,
-        deliveryPrice: null,
-        boxNumber: null,
-        trackNumber: null,
-        shippingMethodId: null,
-        saleStatus: null,
-      });
-      setHasPrefilled(true);
-      toast({
-        title: "Данные загружены",
-        description: "Артикул и SMART код автоматически заполнены из результатов поиска",
-      });
-    }
+    const smart = searchParams.get("smart");
+    if (!smart || hasPrefilled) return;
+
+    form.setValue("smart", smart);
+    setSearchQuery(smart);
+    setHasPrefilled(true);
+    toast({
+      title: "SMART код загружен",
+      description: `Предзаполнено из URL: ${smart}`,
+    });
   }, [location, hasPrefilled, form, toast]);
 
-  // Cleanup debounce timeout on unmount
+  // Cleanup debounce + abort on unmount.
   useEffect(() => {
     return () => {
-      if (debounceTimeout.current) {
-        clearTimeout(debounceTimeout.current);
-      }
+      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      searchAbortRef.current?.abort();
     };
   }, []);
 
-  // Autocomplete search with debouncing
   const performAutocompleteSearch = async (query: string) => {
-    if (!query.trim() || query.trim().length < 2) {
+    const q = query.trim();
+    if (q.length < 2) {
       setAutocompleteResults([]);
       setAutocompleteOpen(false);
       return;
     }
 
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     try {
-      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query.trim())}`);
-      const results: ArticleSearchResult[] = await response.json();
+      const res = await fetch(`/api/articles/search?query=${encodeURIComponent(q)}`, {
+        credentials: "include",
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      const results = (await res.json()) as ArticleSearchResult[];
       setAutocompleteResults(results);
       setAutocompleteOpen(results.length > 0);
-    } catch (error) {
-      console.error("Autocomplete search error:", error);
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      console.error("Autocomplete search error:", err);
       setAutocompleteResults([]);
       setAutocompleteOpen(false);
     }
   };
 
-  // Trigger autocomplete search on article input change with debouncing
-  const handleArticleInputChange = (value: string) => {
-    if (debounceTimeout.current) {
-      clearTimeout(debounceTimeout.current);
+  const handleSearchInputChange = (value: string) => {
+    setSearchQuery(value);
+
+    // If user starts typing again, drop previous selection to avoid mismatch.
+    if (selectedItem) {
+      setSelectedItem(null);
+      form.setValue("smart", "");
     }
 
-    debounceTimeout.current = setTimeout(() => {
-      performAutocompleteSearch(value);
-    }, 300);
+    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+    debounceTimeout.current = setTimeout(() => performAutocompleteSearch(value), 300);
   };
 
-  const { data: reasons } = useQuery({
+  const handleSelectItem = (item: ArticleSearchResult) => {
+    setSelectedItem(item);
+    form.setValue("smart", item.smart, { shouldValidate: true });
+    setSearchQuery(item.smart);
+    setAutocompleteOpen(false);
+    setAutocompleteResults([]);
+    toast({
+      title: "Позиция выбрана",
+      description: `SMART код: ${item.smart}`,
+    });
+  };
+
+  const { data: reasons } = useQuery<Reason[]>({
     queryKey: ["/api/reasons"],
   });
 
-  const { data: shippingMethods } = useQuery({
+  const { data: shippingMethods } = useQuery<{ id: number; name: string }[]>({
     queryKey: ["/api/shipping-methods"],
   });
 
-  // Filter out 'return' reason - returns should only be done via sold items page
-  const availableReasons = (reasons as Reason[] || []).filter(r => r.code !== 'return');
-
-  // Watch the reason field to show conditional fields
+  const availableReasons = (reasons || []).filter((r) => r.code !== "return");
   const selectedReason = form.watch("reason");
 
-  // Trigger validation when reason changes to validate quantity direction
+  // Clear hidden fields when reason changes (and also clear stale saleStatus).
   useEffect(() => {
-    if (selectedReason) {
-      form.trigger("qtyDelta");
+    if (!selectedReason) return;
+
+    if (selectedReason === "purchase") {
+      form.setValue("salePrice", null);
+      form.setValue("deliveryPrice", null);
+      form.setValue("trackNumber", null);
+      form.setValue("shippingMethodId", null);
+      form.setValue("saleStatus", null);
+      return;
     }
+
+    if (selectedReason === "sale") {
+      form.setValue("purchasePrice", null);
+      form.setValue("boxNumber", null);
+      // sale fields remain
+      form.setValue("saleStatus", null);
+      return;
+    }
+
+    if (selectedReason === "adjust") {
+      // purchasePrice is optional for adjust, but boxNumber is irrelevant
+      form.setValue("boxNumber", null);
+      form.setValue("salePrice", null);
+      form.setValue("deliveryPrice", null);
+      form.setValue("trackNumber", null);
+      form.setValue("shippingMethodId", null);
+      form.setValue("saleStatus", null);
+      return;
+    }
+
+    // writeoff (and any other): clear all extra fields
+    form.setValue("purchasePrice", null);
+    form.setValue("salePrice", null);
+    form.setValue("deliveryPrice", null);
+    form.setValue("boxNumber", null);
+    form.setValue("trackNumber", null);
+    form.setValue("shippingMethodId", null);
+    form.setValue("saleStatus", null);
   }, [selectedReason, form]);
 
-  const searchArticleMutation = useMutation({
-    mutationFn: async (query: string) => {
-      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query)}`);
-      return response.json();
-    },
-    onSuccess: (results: ArticleSearchResult[], variables) => {
-      // Ignore results if article has changed since search was initiated
-      const currentArticle = form.getValues('article');
-      if (currentArticle.trim() !== variables.trim()) {
-        setIsSearching(false);
-        return;
-      }
-      
-      setSearchResults(results);
-      setIsSearching(false);
-      
-      if (results.length === 0) {
-        toast({
-          title: "Совпадений не найдено",
-          description: `SMART код для артикула не найден`,
-          variant: "destructive",
-        });
-        form.setValue('smart', '');
-      } else if (results.length === 1) {
-        form.setValue('smart', results[0].smart);
-        toast({
-          title: "SMART код найден",
-          description: `Автоматически подставлен: ${results[0].smart}`,
-        });
-      } else {
-        setShowDisambiguation(true);
-      }
-    },
-    onError: (error) => {
-      setIsSearching(false);
-      toast({
-        title: "Ошибка поиска",
-        description: error instanceof Error ? error.message : "Не удалось выполнить поиск",
-        variant: "destructive",
-      });
-    },
-  });
+  // Re-validate qty when reason changes.
+  useEffect(() => {
+    if (!selectedReason) return;
+    void form.trigger("qtyDelta");
+  }, [selectedReason, form]);
 
   const createMovementMutation = useMutation({
     mutationFn: async (data: FormData) => {
-      const response = await apiRequest("POST", "/api/movements", data);
+      const response = await apiRequest("POST", "/api/movements", data as InsertMovement);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (_movement, variables) => {
+      const smart = variables.smart;
+
+      // Full invalidation set (staleTime is Infinity by design).
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      
+      queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
+
       toast({
         title: "Движение записано",
         description: "Движение товара успешно зарегистрировано",
       });
-      
-      // Reset all form and search state
+
       form.reset();
-      setSearchResults([]);
-      setShowDisambiguation(false);
-      setIsSearching(false);
-      setLastSearchedArticle("");
+      setSelectedItem(null);
+      setSearchQuery("");
+      setAutocompleteOpen(false);
+      setAutocompleteResults([]);
       clearPrefillParamsFromUrl();
       setHasPrefilled(false);
     },
@@ -266,73 +302,19 @@ export default function AddMovement() {
   });
 
   const onSubmit = (data: FormData) => {
-    // Set saleStatus to "awaiting_shipment" for sales
-    const saleStatus = data.reason === "sale" ? "awaiting_shipment" : null;
-    
-    createMovementMutation.mutate({
-      ...data,
-      saleStatus,
-    });
+    createMovementMutation.mutate(data);
   };
 
   const incrementQty = () => {
-    const currentValue = form.getValues('qtyDelta');
-    const newValue = currentValue + 1;
-    form.setValue('qtyDelta', newValue);
-    form.trigger('qtyDelta');
+    const currentValue = form.getValues("qtyDelta");
+    form.setValue("qtyDelta", currentValue + 1);
+    void form.trigger("qtyDelta");
   };
 
   const decrementQty = () => {
-    const currentValue = form.getValues('qtyDelta');
-    const newValue = currentValue - 1;
-    form.setValue('qtyDelta', newValue);
-    form.trigger('qtyDelta');
-  };
-
-  const handleArticleSearch = () => {
-    const article = form.getValues('article');
-    if (!article.trim()) {
-      toast({
-        title: "Введите артикул",
-        description: "Для поиска SMART кода необходимо ввести артикул",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    setIsSearching(true);
-    setSearchResults([]);
-    searchArticleMutation.mutate(article.trim());
-  };
-
-  const handleSelectMatch = (result: ArticleSearchResult) => {
-    form.setValue('smart', result.smart);
-    setShowDisambiguation(false);
-    toast({
-      title: "SMART код выбран",
-      description: `Выбран: ${result.smart}`,
-    });
-  };
-
-  const handleAutocompleteSelect = (result: ArticleSearchResult) => {
-    // Set article field: use articles if available, otherwise use SMART code
-    let articleValue: string;
-    if (result.articles) {
-      articleValue = Array.isArray(result.articles) 
-        ? result.articles.join(', ') 
-        : result.articles;
-    } else {
-      articleValue = result.smart;
-    }
-    
-    form.setValue('article', articleValue);
-    form.setValue('smart', result.smart);
-    setAutocompleteOpen(false);
-    setAutocompleteResults([]);
-    toast({
-      title: "Позиция выбрана",
-      description: `SMART код: ${result.smart}`,
-    });
+    const currentValue = form.getValues("qtyDelta");
+    form.setValue("qtyDelta", currentValue - 1);
+    void form.trigger("qtyDelta");
   };
 
   return (
@@ -351,7 +333,7 @@ export default function AddMovement() {
               <CardTitle className="flex items-center justify-between">
                 <div>
                   <div className="text-lg font-semibold text-foreground">Ввод движения</div>
-                  <p className="text-sm text-muted-foreground mt-1">Введите данные движения товара</p>
+                  <p className="text-sm text-muted-foreground mt-1">Поиск по артикулам или SMART, затем заполнение операции</p>
                 </div>
                 <i className="fas fa-plus-circle text-muted-foreground text-xl"></i>
               </CardTitle>
@@ -359,146 +341,119 @@ export default function AddMovement() {
             <CardContent>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                  <FormField
-                    control={form.control}
-                    name="article"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Артикул <span className="text-destructive">*</span>
-                        </FormLabel>
-                        <FormControl>
-                          <div className="flex gap-2">
-                            <Popover open={autocompleteOpen} onOpenChange={setAutocompleteOpen}>
-                              <PopoverTrigger asChild>
-                                <div className="flex-1">
-                                  <Input 
-                                    placeholder="Начните вводить артикул..." 
-                                    className="font-mono" 
-                                    {...field}
-                                    onChange={(e) => {
-                                      field.onChange(e);
-                                      handleArticleInputChange(e.target.value);
-                                      // Clear all search state when article changes
-                                      form.setValue('smart', '');
-                                      setSearchResults([]);
-                                      setShowDisambiguation(false);
-                                      setIsSearching(false);
-                                    }}
-                                    data-testid="input-article"
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        handleArticleSearch();
-                                      } else if (e.key === 'Escape') {
-                                        setAutocompleteOpen(false);
-                                      }
-                                    }}
-                                  />
-                                </div>
-                              </PopoverTrigger>
-                              <PopoverContent 
-                                className="w-[var(--radix-popover-trigger-width)] p-0" 
-                                align="start"
-                                onOpenAutoFocus={(e) => e.preventDefault()}
-                              >
-                                <Command>
-                                  <CommandList>
-                                    <CommandEmpty>Ничего не найдено</CommandEmpty>
-                                    <CommandGroup heading="Найденные позиции">
-                                      {autocompleteResults.map((result, idx) => (
-                                        <CommandItem
-                                          key={`${result.smart}-${idx}`}
-                                          value={result.smart}
-                                          onSelect={() => handleAutocompleteSelect(result)}
-                                          className="cursor-pointer"
-                                          data-testid={`autocomplete-item-${idx}`}
-                                        >
-                                          <div className="flex flex-col gap-1 w-full">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <span className="font-mono text-sm font-bold text-primary">
-                                                {result.smart}
-                                              </span>
-                                              {result.brand && (
-                                                <span className="text-xs text-muted-foreground">
-                                                  {Array.isArray(result.brand) ? result.brand.join(', ') : result.brand}
-                                                </span>
-                                              )}
-                                            </div>
-                                            {result.articles && (
-                                              <span className="font-mono text-xs text-muted-foreground">
-                                                {Array.isArray(result.articles) ? result.articles.join(', ') : result.articles}
-                                              </span>
-                                            )}
-                                            {result.name && (
-                                              <span className="text-xs text-muted-foreground">
-                                                {result.name}
-                                              </span>
-                                            )}
-                                          </div>
-                                        </CommandItem>
-                                      ))}
-                                    </CommandGroup>
-                                  </CommandList>
-                                </Command>
-                              </PopoverContent>
-                            </Popover>
-                            <Button
-                              type="button"
-                              onClick={handleArticleSearch}
-                              disabled={isSearching}
-                              data-testid="button-search-smart"
-                            >
-                              {isSearching ? (
-                                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                              ) : (
-                                <>
-                                  <i className="fas fa-search mr-2"></i>
-                                  Найти SMART
-                                </>
-                              )}
-                            </Button>
+                  {/* SMART search */}
+                  <div>
+                    <FormLabel>
+                      Поиск (артикул или SMART) <span className="text-destructive">*</span>
+                    </FormLabel>
+                    <div className="mt-2">
+                      <Popover open={autocompleteOpen} onOpenChange={setAutocompleteOpen}>
+                        <PopoverTrigger asChild>
+                          <div>
+                            <Input
+                              placeholder="Начните вводить артикул или SMART..."
+                              className="font-mono"
+                              value={searchQuery}
+                              onChange={(e) => handleSearchInputChange(e.target.value)}
+                              data-testid="input-smart-search"
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") setAutocompleteOpen(false);
+                              }}
+                            />
                           </div>
-                        </FormControl>
-                        <FormMessage />
-                        <p className="text-xs text-muted-foreground mt-1">
-                          <i className="fas fa-info-circle mr-1"></i>
-                          Начните вводить артикул - появятся подсказки
-                        </p>
-                      </FormItem>
-                    )}
-                  />
+                        </PopoverTrigger>
+                        <PopoverContent
+                          className="w-[var(--radix-popover-trigger-width)] p-0"
+                          align="start"
+                          onOpenAutoFocus={(e) => e.preventDefault()}
+                        >
+                          <Command>
+                            <CommandList>
+                              <CommandEmpty>Ничего не найдено</CommandEmpty>
+                              <CommandGroup heading="Найденные позиции">
+                                {autocompleteResults.map((result, idx) => (
+                                  <CommandItem
+                                    key={`${result.smart}-${idx}`}
+                                    value={result.smart}
+                                    onSelect={() => handleSelectItem(result)}
+                                    className="cursor-pointer"
+                                    data-testid={`autocomplete-item-${idx}`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3 w-full">
+                                      <div className="flex flex-col gap-1">
+                                        <div className="font-mono text-sm font-bold text-primary">{result.smart}</div>
+                                        {!!result.articles?.length && (
+                                          <div className="font-mono text-xs text-muted-foreground break-words">
+                                            {result.articles.join(", ")}
+                                          </div>
+                                        )}
+                                        {result.name && (
+                                          <div className="text-xs text-muted-foreground">{result.name}</div>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-col items-end gap-1">
+                                        {!!result.brand?.length && (
+                                          <div className="text-xs text-muted-foreground">{result.brand.join(", ")}</div>
+                                        )}
+                                        <div className="text-xs text-muted-foreground">
+                                          Остаток: <span className="font-mono font-semibold">{result.currentStock}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        <i className="fas fa-info-circle mr-1"></i>
+                        Устаревшие запросы поиска отменяются автоматически (защита от гонок)
+                      </p>
+                    </div>
+                  </div>
 
+                  {/* Selected SMART */}
                   <FormField
                     control={form.control}
                     name="smart"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          SMART код <span className="text-destructive">*</span>
+                          Выбранный SMART код <span className="text-destructive">*</span>
                         </FormLabel>
                         <FormControl>
-                          <Input 
-                            placeholder="Будет найден автоматически" 
-                            className="font-mono bg-muted cursor-not-allowed" 
-                            {...field}
-                            onKeyDown={(e) => e.preventDefault()}
-                            onPaste={(e) => e.preventDefault()}
+                          <Input
+                            placeholder="Выберите из поиска выше"
+                            className="font-mono bg-muted"
+                            value={field.value || ""}
+                            readOnly
                             data-testid="input-smart-code"
                           />
                         </FormControl>
                         <FormMessage />
-                        {field.value && (
-                          <p className="text-xs text-success mt-1">
-                            <i className="fas fa-check-circle mr-1"></i>
-                            SMART код найден
-                          </p>
+                        {selectedItem && (
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                              <Check className="h-4 w-4 text-success" />
+                              <span>Выбрано: </span>
+                              <span className="font-mono font-semibold text-foreground">{selectedItem.smart}</span>
+                            </div>
+                            {!!selectedItem.articles?.length && (
+                              <div className="mt-1">
+                                <span className="font-semibold">Артикулы:</span>{" "}
+                                <span className="font-mono">{selectedItem.articles.join(", ")}</span>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </FormItem>
                     )}
                   />
 
                   <div className="grid grid-cols-2 gap-4">
+                    {/* qty */}
                     <FormField
                       control={form.control}
                       name="qtyDelta"
@@ -508,9 +463,9 @@ export default function AddMovement() {
                             Изменение количества <span className="text-destructive">*</span>
                           </FormLabel>
                           <div className="flex gap-2">
-                            <Button 
-                              type="button" 
-                              variant="outline" 
+                            <Button
+                              type="button"
+                              variant="outline"
                               size="icon"
                               onClick={decrementQty}
                               data-testid="button-decrement-qty"
@@ -522,17 +477,17 @@ export default function AddMovement() {
                               <Input
                                 type="number"
                                 className="font-mono text-center"
-                                {...field}
+                                value={field.value ?? 0}
                                 onChange={(e) => {
-                                  const val = parseInt(e.target.value) || 0;
-                                  field.onChange(val);
-                                  form.trigger('qtyDelta');
+                                  const val = Number.parseInt(e.target.value, 10);
+                                  field.onChange(Number.isFinite(val) ? val : 0);
+                                  void form.trigger("qtyDelta");
                                 }}
                                 data-testid="input-qty-delta"
                               />
                             </FormControl>
-                            <Button 
-                              type="button" 
+                            <Button
+                              type="button"
                               variant="outline"
                               size="icon"
                               onClick={incrementQty}
@@ -547,6 +502,7 @@ export default function AddMovement() {
                       )}
                     />
 
+                    {/* reason */}
                     <FormField
                       control={form.control}
                       name="reason"
@@ -555,7 +511,7 @@ export default function AddMovement() {
                           <FormLabel>
                             Причина <span className="text-destructive">*</span>
                           </FormLabel>
-                          <Select onValueChange={field.onChange} value={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value || ""}>
                             <FormControl>
                               <SelectTrigger data-testid="select-reason">
                                 <SelectValue placeholder="Выберите причину" />
@@ -574,7 +530,7 @@ export default function AddMovement() {
                       )}
                     />
 
-                    {/* Conditional fields for purchase */}
+                    {/* purchase fields */}
                     {selectedReason === "purchase" && (
                       <>
                         <FormField
@@ -590,8 +546,7 @@ export default function AddMovement() {
                                   type="number"
                                   step="0.01"
                                   placeholder="0.00"
-                                  {...field}
-                                  value={field.value || ""}
+                                  value={field.value ?? ""}
                                   onChange={(e) => field.onChange(e.target.value || null)}
                                   data-testid="input-purchase-price"
                                 />
@@ -611,8 +566,7 @@ export default function AddMovement() {
                               <FormControl>
                                 <Input
                                   placeholder="Например: K-123"
-                                  {...field}
-                                  value={field.value || ""}
+                                  value={field.value ?? ""}
                                   onChange={(e) => field.onChange(e.target.value || null)}
                                   data-testid="input-box-number"
                                 />
@@ -624,17 +578,17 @@ export default function AddMovement() {
                       </>
                     )}
 
-                    {/* Conditional fields for sale */}
+                    {/* sale fields */}
                     {selectedReason === "sale" && (
                       <>
                         <FormField
                           control={form.control}
                           name="salePrice"
                           render={({ field }) => {
-                            const salePrice = parseFloat(field.value || "0");
-                            const qtyDelta = form.watch('qtyDelta');
+                            const salePrice = field.value ? Number(field.value) : 0;
+                            const qtyDelta = form.watch("qtyDelta");
                             const totalAmount = Math.abs(qtyDelta) * salePrice;
-                            
+
                             return (
                               <FormItem>
                                 <FormLabel>
@@ -645,8 +599,7 @@ export default function AddMovement() {
                                     type="number"
                                     step="0.01"
                                     placeholder="0.00"
-                                    {...field}
-                                    value={field.value || ""}
+                                    value={field.value ?? ""}
                                     onChange={(e) => field.onChange(e.target.value || null)}
                                     data-testid="input-sale-price"
                                   />
@@ -675,8 +628,7 @@ export default function AddMovement() {
                                   type="number"
                                   step="0.01"
                                   placeholder="0.00"
-                                  {...field}
-                                  value={field.value || ""}
+                                  value={field.value ?? ""}
                                   onChange={(e) => field.onChange(e.target.value || null)}
                                   data-testid="input-delivery-price"
                                 />
@@ -693,8 +645,8 @@ export default function AddMovement() {
                               <FormLabel>
                                 Способ доставки <span className="text-destructive">*</span>
                               </FormLabel>
-                              <Select 
-                                onValueChange={(value) => field.onChange(parseInt(value))} 
+                              <Select
+                                onValueChange={(value) => field.onChange(Number.parseInt(value, 10))}
                                 value={field.value?.toString() || ""}
                               >
                                 <FormControl>
@@ -703,7 +655,7 @@ export default function AddMovement() {
                                   </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                  {(shippingMethods as any[] || []).map((method: any) => (
+                                  {(shippingMethods || []).map((method) => (
                                     <SelectItem key={method.id} value={method.id.toString()}>
                                       {method.name}
                                     </SelectItem>
@@ -725,8 +677,7 @@ export default function AddMovement() {
                               <FormControl>
                                 <Input
                                   placeholder="Например: RA123456789RU"
-                                  {...field}
-                                  value={field.value || ""}
+                                  value={field.value ?? ""}
                                   onChange={(e) => field.onChange(e.target.value || null)}
                                   data-testid="input-track-number"
                                 />
@@ -737,23 +688,56 @@ export default function AddMovement() {
                         />
                       </>
                     )}
+
+                    {/* adjust fields */}
+                    {selectedReason === "adjust" && (
+                      <FormField
+                        control={form.control}
+                        name="purchasePrice"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              Цена за единицу{" "}
+                              <span className="text-muted-foreground font-normal">(опционально)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={field.value ?? ""}
+                                onChange={(e) => field.onChange(e.target.value || null)}
+                                data-testid="input-adjust-unit-price"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
                   </div>
 
+                  {/* note */}
                   <FormField
                     control={form.control}
                     name="note"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          Примечание <span className="text-muted-foreground font-normal">(опционально)</span>
+                          Примечание{" "}
+                          {selectedReason === "adjust" ? (
+                            <span className="text-destructive">*</span>
+                          ) : (
+                            <span className="text-muted-foreground font-normal">(опционально)</span>
+                          )}
                         </FormLabel>
                         <FormControl>
                           <Textarea
                             rows={3}
                             placeholder="Дополнительные комментарии..."
                             className="resize-none"
-                            {...field}
-                            value={field.value || ""}
+                            value={field.value ?? ""}
+                            onChange={field.onChange}
                             data-testid="textarea-note"
                           />
                         </FormControl>
@@ -763,12 +747,7 @@ export default function AddMovement() {
                   />
 
                   <div className="flex gap-3 pt-2">
-                    <Button 
-                      type="submit" 
-                      className="flex-1"
-                      disabled={createMovementMutation.isPending}
-                      data-testid="button-submit-movement"
-                    >
+                    <Button type="submit" className="flex-1" disabled={createMovementMutation.isPending} data-testid="button-submit-movement">
                       {createMovementMutation.isPending ? (
                         <>
                           <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
@@ -781,15 +760,15 @@ export default function AddMovement() {
                         </>
                       )}
                     </Button>
-                    <Button 
-                      type="button" 
+                    <Button
+                      type="button"
                       variant="secondary"
                       onClick={() => {
                         form.reset();
-                        setSearchResults([]);
-                        setShowDisambiguation(false);
-                        setIsSearching(false);
-                        setLastSearchedArticle("");
+                        setSelectedItem(null);
+                        setSearchQuery("");
+                        setAutocompleteOpen(false);
+                        setAutocompleteResults([]);
                         clearPrefillParamsFromUrl();
                         setHasPrefilled(false);
                       }}
@@ -805,14 +784,6 @@ export default function AddMovement() {
           </Card>
         </div>
       </div>
-
-      <DisambiguationModal
-        isOpen={showDisambiguation}
-        onClose={() => setShowDisambiguation(false)}
-        onSelect={handleSelectMatch}
-        matches={searchResults}
-        searchQuery={form.getValues('article')}
-      />
     </div>
   );
 }

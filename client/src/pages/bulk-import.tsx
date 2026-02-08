@@ -38,6 +38,10 @@ export default function BulkImport() {
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
       
       if (result.imported > 0) {
         toast({
@@ -249,7 +253,7 @@ export default function BulkImport() {
                     <span className="font-medium">Обязательность</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>article</span>
+                    <span>smart</span>
                     <Badge variant="destructive" className="text-xs">Обязательно</Badge>
                   </div>
                   <div className="flex justify-between">
@@ -265,10 +269,37 @@ export default function BulkImport() {
                     <Badge variant="secondary" className="text-xs">Опционально</Badge>
                   </div>
                   <div className="flex justify-between">
-                    <span>smart</span>
+                    <span>purchase_price</span>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>box_number</span>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>sale_price</span>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>delivery_price</span>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>shipping_method_id</span>
+                    <Badge variant="secondary" className="text-xs">Опционально</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>track_number</span>
                     <Badge variant="secondary" className="text-xs">Опционально</Badge>
                   </div>
                 </div>
+                <p className="text-xs text-muted-foreground mt-4">
+                  Правила по типам операций: для <span className="font-mono">purchase</span> обязательны{" "}
+                  <span className="font-mono">purchase_price</span> и <span className="font-mono">box_number</span>; для{" "}
+                  <span className="font-mono">sale</span> обязательны <span className="font-mono">sale_price</span>,{" "}
+                  <span className="font-mono">delivery_price</span> и <span className="font-mono">shipping_method_id</span>.
+                  Операция <span className="font-mono">return</span> через импорт не поддерживается.
+                </p>
               </CardContent>
             </Card>
 

@@ -18,20 +18,16 @@ export default function StockLevels() {
 
   const filteredStock = (stockLevels as StockLevel[] || []).filter(item => {
     const filterLower = filter.toLowerCase();
-    const matchesBrand = item.brand ? 
-      (Array.isArray(item.brand) ? 
-        item.brand.some(b => b.toLowerCase().includes(filterLower)) : 
-        item.brand.toLowerCase().includes(filterLower)) : 
-      false;
-    const matchesDescription = item.description ? 
-      (Array.isArray(item.description) ? 
-        item.description.some(d => d.toLowerCase().includes(filterLower)) : 
-        item.description.toLowerCase().includes(filterLower)) : 
-      false;
+    const matchesBrand = (item.brand || []).some((b) => b.toLowerCase().includes(filterLower));
+    const matchesDescription = (item.description || []).some((d) => d.toLowerCase().includes(filterLower));
+    const matchesArticles = (item.articles || []).some((a) => a.toLowerCase().includes(filterLower));
+    const matchesName = (item.name || "").toLowerCase().includes(filterLower);
     
     return item.smart.toLowerCase().includes(filterLower) ||
       matchesBrand ||
-      matchesDescription;
+      matchesDescription ||
+      matchesArticles ||
+      matchesName;
   });
 
   const getStockStatus = (qty: number) => {
@@ -57,7 +53,7 @@ export default function StockLevels() {
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <Input
-                    placeholder="Фильтр артикулов..."
+                    placeholder="Фильтр (SMART/артикулы/бренд/описание)..."
                     className="w-48 pl-9 text-sm"
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
@@ -119,8 +115,10 @@ export default function StockLevels() {
                       return (
                         <TableRow key={item.smart} className="hover:bg-muted/50">
                           <TableCell className="font-mono font-semibold">{item.smart}</TableCell>
-                          <TableCell>{item.brand || "—"}</TableCell>
-                          <TableCell className="max-w-xs truncate">{item.description || "—"}</TableCell>
+                          <TableCell>{item.brand?.length ? item.brand.join(", ") : "—"}</TableCell>
+                          <TableCell className="max-w-xs truncate">
+                            {item.description?.length ? item.description.join(", ") : "—"}
+                          </TableCell>
                           <TableCell className="text-right font-mono font-semibold">{item.totalQty}</TableCell>
                           <TableCell className="text-center">
                             <Badge variant={status.variant} className="text-xs">

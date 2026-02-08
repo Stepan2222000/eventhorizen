@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is an internal inventory tracking system designed to link user-entered article codes with a standardized SMART reference database. It features robust fuzzy matching for article variants, maintains a complete movement history, and calculates current stock levels from transaction deltas. The system includes financial tracking for purchase and sale operations, warehouse tracking (box numbers), and a two-phase sales workflow with shipping integration. A critical business logic ensures stock validation before sales/write-offs, preventing negative stock levels. The system automatically handles schema migrations and is localized entirely in Russian for internal network users. Key capabilities include:
+This project is an internal inventory tracking system built around **SMART codes as the single identifier** for stock, analytics, and sales validation. Users can search by article codes or SMART, but inventory movements store only `smart` (articles are derived from the cached SMART reference). It features robust fuzzy matching for article variants, maintains a complete movement history, and calculates current stock levels from transaction deltas. The system includes financial tracking for purchase and sale operations, warehouse tracking (box numbers), and a two-phase sales workflow with shipping integration. A critical business logic ensures stock validation before sales/write-offs, preventing negative stock levels. The system automatically ensures inventory schema on startup and is localized entirely in Russian for internal network users. Key capabilities include:
 
 -   Fuzzy matching of article codes to a SMART reference database.
 -   Comprehensive movement history and real-time stock level calculation.
@@ -45,24 +45,26 @@ Preferred communication style: Simple, everyday language.
 -   Independent scrolling for long tables within sections to improve visibility.
 
 **Feature Specifications:**
--   Pages for Dashboard, Article Search, Add Movement, Stock Levels, Stock Details (with purchase/sales analytics), Movement History, Sold Items, Sold Out Items, Top Parts Ranking, Bulk Import, and Database Connections.
+-   Pages for Dashboard, Article Search, Add Movement, Stock Levels, Stock Details (with purchase/sales analytics), Movement History, Sold Items, Sold Out Items, Top Parts Ranking, and Bulk Import.
 -   Pre-filling of movement forms from search results via URL parameters.
 -   Comprehensive sales analytics on stock details including profitability metrics and cost basis matching.
 -   "Sold Out Items" page displaying zero-stock items with sales history.
 -   "Top Parts Ranking" page with analytical modes for profitability, sales, and combined performance.
+    -   Note: database connection management UI was removed by design (see `lab/validation/specification.md`).
 
 ### Backend Architecture
 
 **Technology Stack:**
 -   Express.js server with TypeScript (Node.js runtime, ESM modules)
--   Drizzle ORM for local database interactions
--   PostgreSQL database (standard `pg` driver)
+-   PostgreSQL database via `pg` driver (`pg.Pool`)
 -   Multer for file uploads
 -   XLSX library for spreadsheet parsing
 
 **System Design Choices:**
 -   Repository pattern with storage abstraction.
--   Dual database connection strategy (read-only for SMART, read-write for inventory).
+-   Two fixed database connections configured via environment variables:
+    -   Parts/SMART reference DB (read-only) is fully cached in memory on server start.
+    -   Inventory DB (read-write) stores movements and derived views (stock, analytics).
 -   Server-side normalization logic for fuzzy article matching (uppercase, delimiter removal, Cyrillic-to-Latin).
 -   RESTful API endpoints.
 -   Automatic schema migration and seed data on startup.
@@ -79,15 +81,15 @@ Preferred communication style: Simple, everyday language.
     -   `inventory.movements`: Transaction log for all inventory operations, including financial and logistical details.
     -   `inventory.stock` view: Aggregates movements for current stock levels.
     -   `inventory.shipping_methods`: Stores available shipping methods.
-    -   `inventory.db_connections`: Stores database connection credentials.
+    -   No `inventory.db_connections` table and no UI for configuring DB connections.
 
 ## External Dependencies
 
 **Database:**
 -   PostgreSQL database via standard `pg` driver with connection pooling.
--   Local inventory database (configured via `DATABASE_URL`).
--   External SMART database (e.g., `parts_admin@81.30.105.134:5403`).
--   Drizzle ORM for local database, raw `pg.Pool` for dynamic external connections.
+-   Two fixed DBs configured via env vars (see `.env.example`):
+    -   `PARTS_DB_HOST/PORT/NAME/USER/PASSWORD`
+    -   `INVENTORY_DB_HOST/PORT/NAME/USER/PASSWORD`
 
 **Third-Party Libraries:**
 -   Radix UI: Accessible component primitives.

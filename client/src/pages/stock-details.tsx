@@ -27,6 +27,20 @@ export default function StockDetails() {
   // Ensure purchases is always an array
   const purchases = Array.isArray(purchasesData) ? purchasesData : [];
 
+  const purchaseLines = purchases
+    .map((p) => ({
+      price: p.purchasePrice ? Number(p.purchasePrice) : NaN,
+      qty: Math.abs(p.qtyDelta),
+    }))
+    .filter((l) => Number.isFinite(l.price) && l.qty > 0);
+
+  const totalPurchasedQty = purchases.reduce((sum, p) => sum + Math.abs(p.qtyDelta), 0);
+  const totalPurchaseQtyWithPrice = purchaseLines.reduce((sum, l) => sum + l.qty, 0);
+  const totalPurchaseCost =
+    purchaseLines.length > 0 ? purchaseLines.reduce((sum, l) => sum + l.price * l.qty, 0) : null;
+  const avgPurchasePrice =
+    totalPurchaseQtyWithPrice > 0 && totalPurchaseCost !== null ? totalPurchaseCost / totalPurchaseQtyWithPrice : null;
+
   // Fetch sales analytics
   const { data: salesData, isLoading: salesLoading } = useQuery<{
     sales: (Movement & { profit: number; profitMarginPercent: number; daysFromPurchase: number | null; purchasePriceUsed: number })[];
@@ -60,9 +74,11 @@ export default function StockDetails() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
       toast({
         title: "Сохранено",
         description: "Изменения успешно сохранены",
@@ -167,31 +183,19 @@ export default function StockDetails() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Общее количество</p>
                   <p className="text-2xl font-semibold text-foreground">
-                    {purchases.reduce((sum, p) => sum + Math.abs(p.qtyDelta), 0)}
+                    {totalPurchasedQty}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Средняя цена</p>
                   <p className="text-2xl font-semibold text-foreground">
-                    {purchases.filter(p => p.purchasePrice).length > 0
-                      ? (purchases
-                          .filter(p => p.purchasePrice)
-                          .reduce((sum, p) => sum + parseFloat(p.purchasePrice!), 0) /
-                          purchases.filter(p => p.purchasePrice).length).toFixed(2)
-                      : "—"} ₽
+                    {avgPurchasePrice !== null ? `${avgPurchasePrice.toFixed(2)} ₽` : "—"}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Всего затрат</p>
                   <p className="text-2xl font-semibold text-foreground">
-                    {purchases
-                      .filter(p => p.purchasePrice)
-                      .reduce((sum, p) => {
-                        const price = parseFloat(p.purchasePrice!);
-                        const qty = Math.abs(p.qtyDelta);
-                        return sum + (price * qty);
-                      }, 0)
-                      .toFixed(2)} ₽
+                    {totalPurchaseCost !== null ? `${totalPurchaseCost.toFixed(2)} ₽` : "—"}
                   </p>
                 </div>
               </div>
@@ -230,7 +234,6 @@ export default function StockDetails() {
                     <thead className="[&_tr]:border-b bg-muted/50">
                       <tr className="border-b transition-colors">
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[120px]">Дата</th>
-                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[180px]">Артикул</th>
                         <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground w-[100px]">Кол-во</th>
                         <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground w-[150px]">Цена закупа</th>
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground min-w-[200px]">Комментарий</th>
@@ -248,7 +251,6 @@ export default function StockDetails() {
                           <td className="p-4 align-middle font-mono text-sm whitespace-nowrap">
                             {format(new Date(purchase.createdAt), "dd.MM.yyyy")}
                           </td>
-                          <td className="p-4 align-middle font-mono whitespace-nowrap">{purchase.article}</td>
                           <td className="p-4 align-middle text-right">
                             {editingCell?.id === purchase.id && editingCell.field === 'qtyDelta' ? (
                               <div className="flex items-center justify-end gap-1">

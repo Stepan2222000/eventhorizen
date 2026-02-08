@@ -37,7 +37,12 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(queryKey.join("/") as string, {
+    const url = Array.isArray(queryKey) ? queryKey[0] : queryKey;
+    if (typeof url !== "string") {
+      throw new Error("Invalid queryKey: expected [url]");
+    }
+
+    const res = await fetch(url, {
       credentials: "include",
     });
 

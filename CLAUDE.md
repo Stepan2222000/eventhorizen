@@ -1,6 +1,8 @@
 # EventHorizon - Файловая структура проекта
 
-Этот документ описывает структуру проекта SMART Inventory Management System, разработанного с помощью Claude Code.
+Этот документ описывает структуру проекта EventHorizon (SMART-справочник + складской учет).
+
+Источник истины по бизнес-логике и философии системы: `lab/validation/specification.md`.
 
 ## Корневая директория
 
@@ -9,13 +11,14 @@ EventHorizon/
 ├── client/              # Frontend React приложение
 ├── server/              # Backend Express сервер
 ├── shared/              # Общий код между клиентом и сервером
+├── migrations/          # Исторически (сейчас схема inventory обеспечивается при старте сервера)
+├── lab/                 # Документация по валидации/рефакторингу (spec + plan)
 ├── attached_assets/     # Статические ресурсы и файлы
 ├── .claude/            # Конфигурация Claude Code
 ├── package.json        # Зависимости проекта
 ├── tsconfig.json       # Конфигурация TypeScript
 ├── vite.config.ts      # Конфигурация Vite
 ├── tailwind.config.ts  # Конфигурация Tailwind CSS
-├── drizzle.config.ts   # Конфигурация Drizzle ORM
 ├── components.json     # Конфигурация shadcn/ui компонентов
 ├── design_guidelines.md # Руководство по дизайну
 └── README.md           # Документация проекта
@@ -36,16 +39,15 @@ EventHorizon/
 #### `/client/src/pages` - Страницы приложения
 
 - `dashboard.tsx` - Главная панель с основной статистикой
-- `article-search.tsx` - Поиск артикулов в базе SMART
-- `add-movement.tsx` - Добавление складских операций (поступление, продажа, списание)
+- `article-search.tsx` - Поиск по SMART/артикулам в SMART-справочнике
+- `add-movement.tsx` - Добавление складских операций (purchase/sale/writeoff/adjust)
 - `stock-levels.tsx` - Текущие уровни запасов
-- `stock-details.tsx` - Детальная информация по конкретному артикулу с аналитикой
+- `stock-details.tsx` - Детали товара по SMART-коду + аналитика покупок/продаж
 - `movement-history.tsx` - История всех операций
 - `sold-items.tsx` - История проданных товаров
 - `sold-out.tsx` - Список товаров с нулевым остатком и историей продаж
 - `top-parts.tsx` - Рейтинг лучших товаров по прибыльности и продажам
 - `bulk-import.tsx` - Массовый импорт данных из Excel/CSV
-- `db-connections.tsx` - Управление подключениями к базам данных
 - `not-found.tsx` - Страница 404
 
 #### `/client/src/components` - React компоненты
@@ -111,7 +113,7 @@ EventHorizon/
 
 - `utils.ts` - Утилитные функции (cn для классов)
 - `queryClient.ts` - Конфигурация TanStack Query
-- `normalization.ts` - Функции нормализации артикулов (клиентская версия)
+  - Нормализация артикулов берется из `shared/normalization.ts` (единая реализация)
 
 ### `/server` - Backend приложение
 
@@ -119,27 +121,29 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 
 **Основные файлы:**
 - `index.ts` - Точка входа сервера, настройка Express, middleware, запуск
+- `context.ts` - Fail-fast инициализация (подключение к двум БД, схема inventory, SMART-кэш)
 - `routes.ts` - Определение всех API эндпоинтов
 - `storage.ts` - Бизнес-логика и взаимодействие с БД (Repository паттерн)
-- `db.ts` - Подключение к PostgreSQL через Drizzle ORM
+- `config.ts` - Чтение конфигурации из env (PARTS_DB_*, INVENTORY_DB_*)
+- `db.ts` - Создание двух `pg.Pool` на процесс (parts + inventory)
+- `smart-cache.ts` - Загрузка SMART-справочника в память (кэш) при старте
+- `inventory-schema.ts` - Idempotent обеспечение схемы `inventory.*` и VIEW `inventory.stock`
 - `vite.ts` - Интеграция Vite для разработки
 
 **API эндпоинты (примеры):**
 - `GET /api/articles/search` - Поиск артикулов
 - `POST /api/movements` - Добавление операции
 - `GET /api/stock` - Получение уровней запасов
-- `GET /api/stock/:smartCode` - Детали по артикулу
+- `GET /api/stock/:smart` - Детали по SMART (возвращает `totalQty: 0`, если товар был в истории)
 - `GET /api/movements` - История операций
 - `POST /api/bulk-import` - Массовый импорт
-- `GET /api/db-connections` - Список подключений БД
-- `POST /api/db-connections` - Добавление подключения
 
 ### `/shared` - Общий код
 
 Код, используемый и на клиенте, и на сервере.
 
 **Файлы:**
-- `schema.ts` - Drizzle ORM схемы базы данных, типы данных, Zod схемы валидации
+- `schema.ts` - Типы данных + Zod схемы валидации (без ORM)
 - `normalization.ts` - Функции нормализации артикулов (общие)
 
 **Основные схемы БД:**
@@ -147,7 +151,6 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 - `movements` - Журнал всех операций
 - `stock` - View для текущих остатков
 - `shippingMethods` - Способы доставки
-- `dbConnections` - Настройки подключений к БД
 
 ### `/attached_assets` - Ресурсы
 
@@ -157,13 +160,12 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 
 #### `package.json`
 Описание проекта и зависимостей:
-- **Зависимости:** React, Express, Drizzle ORM, TanStack Query, shadcn/ui компоненты, Zod, и др.
+- **Зависимости:** React, Express, TanStack Query, shadcn/ui компоненты, Zod, pg, и др.
 - **Scripts:**
   - `dev` - Запуск в режиме разработки
   - `build` - Сборка production версии
   - `start` - Запуск production сервера
   - `check` - Проверка типов TypeScript
-  - `db:push` - Применение миграций БД
 
 #### `tsconfig.json`
 Конфигурация TypeScript компилятора для всего проекта.
@@ -181,12 +183,6 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 - Кастомные утилиты
 - Плагины (typography, animations)
 
-#### `drizzle.config.ts`
-Конфигурация Drizzle ORM:
-- Путь к схемам
-- Настройки подключения к БД
-- Директория миграций
-
 #### `components.json`
 Конфигурация shadcn/ui:
 - Стили компонентов
@@ -201,22 +197,21 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 ### База данных PostgreSQL
 
 **Схемы:**
-- `public.smart` - Внешняя база SMART (read-only)
-- `inventory.*` - Локальная база складского учета
+- `public.smart` - SMART-справочник (read-only, загружается целиком в память сервера)
+- `inventory.*` - Складской учет (создается/обеспечивается приложением в inventory DB)
 
 **Ключевые таблицы:**
 - `inventory.reasons` - Справочник типов операций
-- `inventory.movements` - Журнал операций (источник истины)
+- `inventory.movements` - Журнал операций (источник истины, хранит только `smart`, без `article`)
 - `inventory.stock` (view) - Агрегированные остатки
 - `inventory.shipping_methods` - Способы доставки
-- `inventory.db_connections` - Подключения к БД
 
 ### Потоки данных
 
-1. **Поиск артикула:** Client → API → SMART DB → Fuzzy Match → Client
-2. **Добавление операции:** Client → API → Validation → Transaction → DB → Client
-3. **Просмотр остатков:** Client → API → Stock View (aggregation) → Client
-4. **Аналитика:** Client → API → Complex Queries → Client
+1. **Поиск:** Client → API → поиск по SMART-кэшу (в памяти) → batch-остатки из inventory → Client
+2. **Добавление операции:** Client → API → валидация/санитизация → SERIALIZABLE txn → inventory DB → Client
+3. **Остатки:** Client → API → VIEW `inventory.stock` (агрегация) → Client
+4. **Аналитика:** Client → API → агрегации по SMART → Client
 
 ## Технологический стек
 
@@ -234,7 +229,7 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 - **Runtime:** Node.js (ESM)
 - **Framework:** Express.js
 - **Database:** PostgreSQL
-- **ORM:** Drizzle ORM
+- **DB driver:** `pg` (`pg.Pool`)
 - **Validation:** Zod
 - **File Upload:** Multer
 - **Spreadsheets:** XLSX
@@ -250,14 +245,14 @@ Express.js сервер на TypeScript с поддержкой ESM модуле
 ### Бизнес-логика
 - Fuzzy matching артикулов (нормализация, удаление разделителей, транслитерация)
 - Предотвращение отрицательных остатков через валидацию и SERIALIZABLE транзакции
-- Двухфазный процесс продаж (резервирование → отгрузка)
+- Статусы продаж (ожидает отправки → отправлено) применимы только к операциям `sale`
 - Автоматический retry при конфликтах сериализации
-- Расчет прибыльности на основе FIFO/средневзвешенной стоимости
+- Расчет прибыльности на основе средней цены закупки по SMART (средневзвешенная по количеству)
 
 ### Безопасность
-- Prepared statements (защита от SQL injection через Drizzle ORM)
+- Parameterized queries (защита от SQL injection через параметры `pg`)
 - Валидация входных данных (Zod схемы)
-- Контроль доступа к внешним БД (read-only пул для SMART)
+- Контроль доступа к внешним БД (SMART DB используется только для чтения)
 
 ### Производительность
 - Batch запросы для минимизации обращений к БД

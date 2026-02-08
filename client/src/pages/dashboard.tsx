@@ -198,7 +198,9 @@ export default function Dashboard() {
                       <div key={item.smart} className="flex items-center justify-between p-3 rounded border hover:bg-muted/50 transition-colors">
                         <div>
                           <div className="font-mono font-semibold text-sm">{item.smart}</div>
-                          <div className="text-xs text-muted-foreground">{item.description}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {item.description?.length ? item.description.join(", ") : "—"}
+                          </div>
                         </div>
                         <div className="text-right">
                           <div className="font-mono font-semibold">{item.totalQty}</div>

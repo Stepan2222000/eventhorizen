@@ -37,23 +37,23 @@ export default function SoldItems() {
 
   const returnToInventoryMutation = useMutation({
     mutationFn: async (movementId: number) => {
-      console.log("Calling return API for movement:", movementId);
       const response = await apiRequest("POST", `/api/movements/${movementId}/return`, {});
-      console.log("Return API response received");
       return response.json();
     },
-    onSuccess: () => {
-      console.log("Return mutation SUCCESS");
+    onSuccess: (data: Movement) => {
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/purchases`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}`] });
       toast({
         title: "Товар возвращен",
         description: "Товар возвращен на склад",
       });
     },
     onError: (error) => {
-      console.log("Return mutation ERROR:", error);
       const message = error instanceof Error ? error.message : "Произошла ошибка";
       toast({
         title: "Ошибка возврата товара",
@@ -65,7 +65,7 @@ export default function SoldItems() {
 
   // Filter movements by status
   const awaitingShipment = movements.filter(m => 
-    m.reason === "sale" && m.saleStatus === "awaiting_shipment"
+    m.reason === "sale" && (!m.saleStatus || m.saleStatus === "awaiting_shipment")
   );
   const shipped = movements.filter(m => 
     m.reason === "sale" && m.saleStatus === "shipped"
@@ -142,7 +142,7 @@ export default function SoldItems() {
                             {movement.smart}
                           </div>
                           <div className="text-xs text-muted-foreground break-words">
-                            {movement.article}
+                            {(movement.articles || []).length ? (movement.articles || []).join(", ") : "—"}
                           </div>
                         </div>
                         <Badge variant="outline" className="ml-2">
@@ -242,7 +242,7 @@ export default function SoldItems() {
                             {movement.smart}
                           </div>
                           <div className="text-xs text-muted-foreground break-words">
-                            {movement.article}
+                            {(movement.articles || []).length ? (movement.articles || []).join(", ") : "—"}
                           </div>
                         </div>
                         <Badge className="bg-success text-success-foreground ml-2">

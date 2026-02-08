@@ -16,7 +16,7 @@ export default function MovementHistory() {
 
   const filteredMovements = (movements as Movement[] || []).filter(movement =>
     movement.smart.toLowerCase().includes(filter.toLowerCase()) ||
-    movement.article.toLowerCase().includes(filter.toLowerCase()) ||
+    (movement.articles || []).join(", ").toLowerCase().includes(filter.toLowerCase()) ||
     movement.reason.toLowerCase().includes(filter.toLowerCase()) ||
     (movement.note && movement.note.toLowerCase().includes(filter.toLowerCase()))
   );
@@ -73,14 +73,14 @@ export default function MovementHistory() {
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-[140px]">Дата/Время</TableHead>
-                    <TableHead className="w-[130px]">SMART</TableHead>
-                    <TableHead className="w-[150px]">Артикул</TableHead>
-                    <TableHead className="text-right w-[80px]">Кол-во Δ</TableHead>
-                    <TableHead className="w-[100px]">Причина</TableHead>
-                    <TableHead>Примечание</TableHead>
-                  </TableRow>
+                    <TableRow>
+                      <TableHead className="w-[140px]">Дата/Время</TableHead>
+                      <TableHead className="w-[130px]">SMART</TableHead>
+                      <TableHead className="w-[220px]">Артикулы</TableHead>
+                      <TableHead className="text-right w-[80px]">Кол-во Δ</TableHead>
+                      <TableHead className="w-[100px]">Причина</TableHead>
+                      <TableHead>Примечание</TableHead>
+                    </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
@@ -110,7 +110,7 @@ export default function MovementHistory() {
                           {movement.smart}
                         </TableCell>
                         <TableCell className="font-mono">
-                          {movement.article}
+                          {(movement.articles || []).length ? (movement.articles || []).join(", ") : "—"}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={`font-mono font-semibold ${

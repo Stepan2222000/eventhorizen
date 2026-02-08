@@ -11,7 +11,6 @@ const navigation = [
   { name: 'Распроданные товары', href: '/sold-out', icon: 'fas fa-box-open' },
   { name: 'Топ запчастей', href: '/top-parts', icon: 'fas fa-trophy' },
   { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
-  { name: 'Подключения БД', href: '/db-connections', icon: 'fas fa-database' },
 ];
 
 export function Sidebar() {

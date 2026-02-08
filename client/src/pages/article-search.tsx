@@ -29,6 +29,7 @@ export default function ArticleSearch() {
     onSuccess: (results: ArticleSearchResult[]) => {
       setSearchResults(results);
       setIsSearching(false);
+      setShowDisambiguation(false);
       
       if (results.length === 0) {
         toast({
@@ -63,6 +64,7 @@ export default function ArticleSearch() {
     setIsSearching(true);
     setSearchResults([]);
     setSelectedResult(null);
+    setShowDisambiguation(false);
     searchMutation.mutate(searchQuery.trim());
   };
 
@@ -201,13 +203,7 @@ export default function ArticleSearch() {
                       className="flex-1" 
                       data-testid="button-add-movement"
                       onClick={() => {
-                        const articleValue = Array.isArray(selectedResult.articles) && selectedResult.articles.length > 0
-                          ? selectedResult.articles.join(', ')
-                          : selectedResult.smart;
-                        const params = new URLSearchParams({
-                          smart: selectedResult.smart,
-                          article: articleValue
-                        });
+                        const params = new URLSearchParams({ smart: selectedResult.smart });
                         setLocation(`/movement?${params.toString()}`);
                       }}
                     >
