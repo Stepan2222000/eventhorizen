@@ -1,23 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
+import { SmartSearch } from "@/components/smart-search";
 import { insertMovementSchema } from "@shared/schema";
-import type { ArticleSearchResult, InsertMovement, Reason } from "@shared/schema";
+import type { InsertMovement, Reason } from "@shared/schema";
 import { z } from "zod";
-import { Check } from "lucide-react";
 
 const formSchema = insertMovementSchema
   .extend({
@@ -82,16 +80,10 @@ type FormData = z.infer<typeof formSchema>;
 export default function AddMovement() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [location] = useLocation();
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
-  const [autocompleteResults, setAutocompleteResults] = useState<ArticleSearchResult[]>([]);
-  const [selectedItem, setSelectedItem] = useState<ArticleSearchResult | null>(null);
-  const [hasPrefilled, setHasPrefilled] = useState(false);
+  const [searchKey, setSearchKey] = useState(0);
 
-  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
-  const searchAbortRef = useRef<AbortController | null>(null);
+  const prefillSmart = new URLSearchParams(window.location.search).get("smart") ?? undefined;
 
   const clearPrefillParamsFromUrl = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -107,7 +99,7 @@ export default function AddMovement() {
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      smart: "",
+      smart: prefillSmart || "",
       qtyDelta: 0,
       reason: undefined as any,
       note: "",
@@ -121,85 +113,16 @@ export default function AddMovement() {
     },
   });
 
-  // Prefill by SMART from URL (only `smart` is supported by spec).
+  // Show toast for URL prefill on mount.
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const smart = searchParams.get("smart");
-    if (!smart || hasPrefilled) return;
-
-    form.setValue("smart", smart);
-    setSearchQuery(smart);
-    setHasPrefilled(true);
-    toast({
-      title: "SMART код загружен",
-      description: `Предзаполнено из URL: ${smart}`,
-    });
-  }, [location, hasPrefilled, form, toast]);
-
-  // Cleanup debounce + abort on unmount.
-  useEffect(() => {
-    return () => {
-      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
-      searchAbortRef.current?.abort();
-    };
-  }, []);
-
-  const performAutocompleteSearch = async (query: string) => {
-    const q = query.trim();
-    if (q.length < 2) {
-      setAutocompleteResults([]);
-      setAutocompleteOpen(false);
-      return;
-    }
-
-    searchAbortRef.current?.abort();
-    const controller = new AbortController();
-    searchAbortRef.current = controller;
-
-    try {
-      const res = await fetch(`/api/articles/search?query=${encodeURIComponent(q)}`, {
-        credentials: "include",
-        signal: controller.signal,
+    if (prefillSmart) {
+      toast({
+        title: "SMART код загружен",
+        description: `Предзаполнено из URL: ${prefillSmart}`,
       });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
-      }
-      const results = (await res.json()) as ArticleSearchResult[];
-      setAutocompleteResults(results);
-      setAutocompleteOpen(results.length > 0);
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-      console.error("Autocomplete search error:", err);
-      setAutocompleteResults([]);
-      setAutocompleteOpen(false);
     }
-  };
-
-  const handleSearchInputChange = (value: string) => {
-    setSearchQuery(value);
-
-    // If user starts typing again, drop previous selection to avoid mismatch.
-    if (selectedItem) {
-      setSelectedItem(null);
-      form.setValue("smart", "");
-    }
-
-    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
-    debounceTimeout.current = setTimeout(() => performAutocompleteSearch(value), 300);
-  };
-
-  const handleSelectItem = (item: ArticleSearchResult) => {
-    setSelectedItem(item);
-    form.setValue("smart", item.smart, { shouldValidate: true });
-    setSearchQuery(item.smart);
-    setAutocompleteOpen(false);
-    setAutocompleteResults([]);
-    toast({
-      title: "Позиция выбрана",
-      description: `SMART код: ${item.smart}`,
-    });
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: reasons } = useQuery<Reason[]>({
     queryKey: ["/api/reasons"],
@@ -260,6 +183,12 @@ export default function AddMovement() {
     void form.trigger("qtyDelta");
   }, [selectedReason, form]);
 
+  const resetForm = () => {
+    form.reset();
+    setSearchKey((k) => k + 1);
+    clearPrefillParamsFromUrl();
+  };
+
   const createMovementMutation = useMutation({
     mutationFn: async (data: FormData) => {
       const response = await apiRequest("POST", "/api/movements", data as InsertMovement);
@@ -285,13 +214,7 @@ export default function AddMovement() {
         description: "Движение товара успешно зарегистрировано",
       });
 
-      form.reset();
-      setSelectedItem(null);
-      setSearchQuery("");
-      setAutocompleteOpen(false);
-      setAutocompleteResults([]);
-      clearPrefillParamsFromUrl();
-      setHasPrefilled(false);
+      resetForm();
     },
     onError: (error) => {
       toast({
@@ -345,110 +268,33 @@ export default function AddMovement() {
                       Поиск (артикул или SMART) <span className="text-destructive">*</span>
                     </FormLabel>
                     <div className="mt-2">
-                      <Popover open={autocompleteOpen} onOpenChange={setAutocompleteOpen}>
-                        <PopoverTrigger asChild>
-                          <div>
-                            <Input
-                              placeholder="Начните вводить артикул или SMART..."
-                              className="font-mono"
-                              value={searchQuery}
-                              onChange={(e) => handleSearchInputChange(e.target.value)}
-                              data-testid="input-smart-search"
-                              onKeyDown={(e) => {
-                                if (e.key === "Escape") setAutocompleteOpen(false);
-                              }}
-                            />
-                          </div>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="w-[var(--radix-popover-trigger-width)] p-0"
-                          align="start"
-                          onOpenAutoFocus={(e) => e.preventDefault()}
-                        >
-                          <Command>
-                            <CommandList>
-                              <CommandEmpty>Ничего не найдено</CommandEmpty>
-                              <CommandGroup heading="Найденные позиции">
-                                {autocompleteResults.map((result, idx) => (
-                                  <CommandItem
-                                    key={`${result.smart}-${idx}`}
-                                    value={result.smart}
-                                    onSelect={() => handleSelectItem(result)}
-                                    className="cursor-pointer"
-                                    data-testid={`autocomplete-item-${idx}`}
-                                  >
-                                    <div className="flex items-start justify-between gap-3 w-full">
-                                      <div className="flex flex-col gap-1">
-                                        <div className="font-mono text-sm font-bold text-primary">{result.smart}</div>
-                                        {!!result.articles?.length && (
-                                          <div className="font-mono text-xs text-muted-foreground break-words">
-                                            {result.articles.join(", ")}
-                                          </div>
-                                        )}
-                                        {result.name && (
-                                          <div className="text-xs text-muted-foreground">{result.name}</div>
-                                        )}
-                                      </div>
-                                      <div className="flex flex-col items-end gap-1">
-                                        {!!result.brand?.length && (
-                                          <div className="text-xs text-muted-foreground">{result.brand.join(", ")}</div>
-                                        )}
-                                        <div className="text-xs text-muted-foreground">
-                                          Остаток: <span className="font-mono font-semibold">{result.currentStock}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
+                      <SmartSearch
+                        key={searchKey}
+                        defaultValue={prefillSmart}
+                        onSelect={(item) => {
+                          form.setValue("smart", item.smart, { shouldValidate: true });
+                        }}
+                        onClear={() => {
+                          form.setValue("smart", "");
+                        }}
+                        placeholder="Начните вводить артикул или SMART..."
+                        data-testid="input-smart-search"
+                      />
+                      <FormField
+                        control={form.control}
+                        name="smart"
+                        render={() => (
+                          <FormItem className="mt-1">
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                       <p className="text-xs text-muted-foreground mt-2">
                         <i className="fas fa-info-circle mr-1"></i>
                         Устаревшие запросы поиска отменяются автоматически (защита от гонок)
                       </p>
                     </div>
                   </div>
-
-                  {/* Selected SMART */}
-                  <FormField
-                    control={form.control}
-                    name="smart"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          Выбранный SMART код <span className="text-destructive">*</span>
-                        </FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder="Выберите из поиска выше"
-                            className="font-mono bg-muted"
-                            value={field.value || ""}
-                            readOnly
-                            data-testid="input-smart-code"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                        {selectedItem && (
-                          <div className="mt-2 text-xs text-muted-foreground">
-                            <div className="flex items-center gap-2">
-                              <Check className="h-4 w-4 text-success" />
-                              <span>Выбрано: </span>
-                              <span className="font-mono font-semibold text-foreground">{selectedItem.smart}</span>
-                            </div>
-                            {!!selectedItem.articles?.length && (
-                              <div className="mt-1">
-                                <span className="font-semibold">Артикулы:</span>{" "}
-                                <span className="font-mono">{selectedItem.articles.join(", ")}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </FormItem>
-                    )}
-                  />
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {/* qty */}
@@ -749,15 +595,7 @@ export default function AddMovement() {
                     <Button
                       type="button"
                       variant="secondary"
-                      onClick={() => {
-                        form.reset();
-                        setSelectedItem(null);
-                        setSearchQuery("");
-                        setAutocompleteOpen(false);
-                        setAutocompleteResults([]);
-                        clearPrefillParamsFromUrl();
-                        setHasPrefilled(false);
-                      }}
+                      onClick={resetForm}
                       data-testid="button-clear-form"
                     >
                       <i className="fas fa-rotate-left mr-2"></i>

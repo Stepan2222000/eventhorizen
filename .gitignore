@@ -4,3 +4,5 @@ dist
 .env
 server/public
 vite.config.ts.*
+__pycache__
+*.pyc
