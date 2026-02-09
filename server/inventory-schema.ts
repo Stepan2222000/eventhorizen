@@ -9,31 +9,8 @@ export async function ensureInventorySchema(inventoryPool: Pool): Promise<void> 
 
     await client.query(`CREATE SCHEMA IF NOT EXISTS inventory`);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS inventory.reasons (
-        code VARCHAR PRIMARY KEY,
-        title TEXT NOT NULL
-      )
-    `);
-
-    // Fixed reasons (specification.md is the source of truth).
-    await client.query(`
-      INSERT INTO inventory.reasons (code, title) VALUES
-        ('purchase', 'Покупка'),
-        ('sale', 'Продажа'),
-        ('return', 'Возврат'),
-        ('writeoff', 'Списание'),
-        ('adjust', 'Корректировка')
-      ON CONFLICT (code) DO UPDATE SET
-        title = EXCLUDED.title
-    `);
-
-    // Reasons are fixed by specification; drop any legacy/custom codes from the lookup table.
-    // This does not affect existing movements because movements.reason is not a FK.
-    await client.query(`
-      DELETE FROM inventory.reasons
-      WHERE code NOT IN ('purchase','sale','return','writeoff','adjust')
-    `);
+    // Reasons are now a constant in shared/schema.ts (REASONS), no DB table needed.
+    await client.query(`DROP TABLE IF EXISTS inventory.reasons`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS inventory.shipping_methods (

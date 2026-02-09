@@ -28,13 +28,6 @@ export default function TopParts() {
 
   return (
     <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Топ запчастей</h1>
-        <p className="text-muted-foreground">
-          Рейтинг самых ликвидных и прибыльных запчастей
-        </p>
-      </div>
-
       <Tabs value={mode} onValueChange={(value) => setMode(value as RankingMode)}>
         <TabsList className="mb-6" data-testid="tabs-ranking-mode">
           <TabsTrigger value="profit" data-testid="tab-profit">

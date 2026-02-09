@@ -24,13 +24,6 @@ export default function SoldOut() {
 
   return (
     <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Распроданные товары</h1>
-        <p className="text-muted-foreground">
-          Запчасти с нулевым остатком, которые были проданы ранее
-        </p>
-      </div>
-
       {!items || items.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">

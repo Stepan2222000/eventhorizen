@@ -131,24 +131,6 @@ export default function StockDetails() {
 
   return (
     <div className="flex-1 overflow-y-auto bg-background">
-      <header className="bg-card border-b border-border sticky top-0 z-10">
-        <div className="px-8 py-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-            <Link href="/" className="hover:text-foreground transition-colors">
-              Главная
-            </Link>
-            <span>/</span>
-            <Link href="/stock" className="hover:text-foreground transition-colors">
-              Остатки
-            </Link>
-            <span>/</span>
-            <span className="text-foreground">{smart}</span>
-          </div>
-          <h2 className="text-2xl font-bold text-foreground">Детали по SMART коду</h2>
-          <p className="text-sm text-muted-foreground mt-1">Просмотр покупок, продаж и аналитики доходности</p>
-        </div>
-      </header>
-
       <div className="p-8 max-w-7xl mx-auto">
         <Card className="bg-card border-border mb-6">
           <CardHeader>

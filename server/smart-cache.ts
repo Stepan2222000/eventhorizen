@@ -67,14 +67,14 @@ export async function loadSmartCache(partsPool: Pool): Promise<SmartCache> {
       for (const item of items) {
         let best = 0;
 
-        if (item.normalizedSmart === q) best = Math.max(best, 100);
-        else if (item.normalizedSmart.startsWith(q)) best = Math.max(best, 90);
-        else if (item.normalizedSmart.includes(q)) best = Math.max(best, 80);
+        if (item.normalizedSmart === q) best = Math.max(best, 70);
+        else if (item.normalizedSmart.startsWith(q)) best = Math.max(best, 60);
+        else if (item.normalizedSmart.includes(q)) best = Math.max(best, 50);
 
         for (const art of item.normalizedArticles) {
-          if (art === q) best = Math.max(best, 70);
-          else if (art.startsWith(q)) best = Math.max(best, 60);
-          else if (art.includes(q)) best = Math.max(best, 50);
+          if (art === q) best = Math.max(best, 100);
+          else if (art.startsWith(q)) best = Math.max(best, 90);
+          else if (art.includes(q)) best = Math.max(best, 80);
         }
 
         if (best > 0) scored.push({ score: best, item });

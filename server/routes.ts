@@ -645,18 +645,18 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
     try {
       // Use SQL aggregation (no artificial limits, no full-table fetch to JS).
       const stats = await ctx.pools.inventoryPool.query<{
-        total_articles: string;
         in_stock: string;
+        total_parts: string;
         movements_today: string;
-        low_stock_alerts: string;
+        sales_today: string;
       }>(`
         WITH
-          totals AS (
-            SELECT COUNT(DISTINCT smart)::text as total_articles
-            FROM inventory.movements
-          ),
           in_stock AS (
             SELECT COUNT(*)::text as in_stock
+            FROM inventory.stock
+          ),
+          total_parts AS (
+            SELECT COALESCE(SUM(total_qty::bigint), 0)::text as total_parts
             FROM inventory.stock
           ),
           movements_today AS (
@@ -664,24 +664,24 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
             FROM inventory.movements
             WHERE created_at::date = CURRENT_DATE
           ),
-          low_stock AS (
-            SELECT COUNT(*)::text as low_stock_alerts
-            FROM inventory.stock
-            WHERE total_qty::bigint > 0 AND total_qty::bigint <= 10
+          sales_today AS (
+            SELECT COUNT(*)::text as sales_today
+            FROM inventory.movements
+            WHERE created_at::date = CURRENT_DATE AND reason = 'sale'
           )
         SELECT
-          (SELECT total_articles FROM totals) as total_articles,
           (SELECT in_stock FROM in_stock) as in_stock,
+          (SELECT total_parts FROM total_parts) as total_parts,
           (SELECT movements_today FROM movements_today) as movements_today,
-          (SELECT low_stock_alerts FROM low_stock) as low_stock_alerts
+          (SELECT sales_today FROM sales_today) as sales_today
       `);
 
       const row = stats.rows[0];
       res.json({
-        totalArticles: Number(row?.total_articles || 0),
         inStock: Number(row?.in_stock || 0),
+        totalParts: Number(row?.total_parts || 0),
         movementsToday: Number(row?.movements_today || 0),
-        lowStockAlerts: Number(row?.low_stock_alerts || 0),
+        salesToday: Number(row?.sales_today || 0),
       });
     } catch (err) {
       console.error("Dashboard stats error:", err);

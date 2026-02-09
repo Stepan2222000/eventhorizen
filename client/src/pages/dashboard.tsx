@@ -1,22 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useState } from "react";
 import { Link } from "wouter";
 import type { StockLevel, Movement } from "@shared/schema";
 
 export default function Dashboard() {
-  const [searchQuery, setSearchQuery] = useState("");
-
   const { data: stats, isLoading: statsLoading } = useQuery<{
-    totalArticles: number;
     inStock: number;
+    totalParts: number;
     movementsToday: number;
-    lowStockAlerts: number;
+    salesToday: number;
   }>({
     queryKey: ["/api/dashboard/stats"],
   });
@@ -48,67 +44,18 @@ export default function Dashboard() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Header */}
-      <header className="bg-card border-b border-border sticky top-0 z-10">
-        <div className="px-8 py-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-foreground">Главная</h2>
-            <p className="text-sm text-muted-foreground mt-1">Общий обзор и операции в реальном времени</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <Input 
-                type="text" 
-                placeholder="Быстрый поиск артикула..." 
-                className="w-64 pl-10 font-mono" 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                data-testid="input-quick-search"
-              />
-              <i className="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"></i>
-            </div>
-            <Link href="/movement">
-              <Button className="gap-2" data-testid="button-quick-add">
-                <i className="fas fa-plus"></i>
-                Быстрое добавление
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </header>
-
       <div className="p-8">
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
-                  <i className="fas fa-box text-primary text-xl"></i>
-                </div>
-                <Badge variant="secondary" className="bg-success/10 text-success">
-                  <i className="fas fa-arrow-up mr-1"></i>
-                  Активно
-                </Badge>
-              </div>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-20 mb-1" />
-              ) : (
-                <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.totalArticles || 0}</h3>
-              )}
-              <p className="text-sm text-muted-foreground">Всего артикулов</p>
-            </CardContent>
-          </Card>
-
-          <Card className="hover:shadow-lg transition-shadow">
-            <CardContent className="p-6">
-              <div className="flex items-start justify-between mb-4">
                 <div className="w-12 h-12 rounded-lg bg-success/10 flex items-center justify-center">
-                  <i className="fas fa-arrow-trend-up text-success text-xl"></i>
+                  <i className="fas fa-boxes-stacked text-success text-xl"></i>
                 </div>
                 <Badge variant="secondary" className="bg-success/10 text-success">
                   <i className="fas fa-check mr-1"></i>
-                  Активно
+                  Склад
                 </Badge>
               </div>
               {statsLoading ? (
@@ -116,7 +63,27 @@ export default function Dashboard() {
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.inStock || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">В наличии</p>
+              <p className="text-sm text-muted-foreground">Позиций в наличии</p>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <i className="fas fa-cubes text-primary text-xl"></i>
+                </div>
+                <Badge variant="secondary" className="bg-primary/10 text-primary">
+                  <i className="fas fa-warehouse mr-1"></i>
+                  Всего
+                </Badge>
+              </div>
+              {statsLoading ? (
+                <Skeleton className="h-8 w-20 mb-1" />
+              ) : (
+                <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.totalParts || 0}</h3>
+              )}
+              <p className="text-sm text-muted-foreground">Запчастей на складе</p>
             </CardContent>
           </Card>
 
@@ -142,20 +109,19 @@ export default function Dashboard() {
           <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 rounded-lg bg-destructive/10 flex items-center justify-center">
-                  <i className="fas fa-exclamation-triangle text-destructive text-xl"></i>
+                <div className="w-12 h-12 rounded-lg bg-orange-500/10 flex items-center justify-center">
+                  <i className="fas fa-cash-register text-orange-500 text-xl"></i>
                 </div>
-                <Badge variant="destructive" className="bg-destructive/10 text-destructive">
-                  <i className="fas fa-arrow-down mr-1"></i>
-                  Внимание
+                <Badge variant="secondary" className="bg-orange-500/10 text-orange-500">
+                  Сегодня
                 </Badge>
               </div>
               {statsLoading ? (
                 <Skeleton className="h-8 w-20 mb-1" />
               ) : (
-                <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.lowStockAlerts || 0}</h3>
+                <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.salesToday || 0}</h3>
               )}
-              <p className="text-sm text-muted-foreground">Критический остаток</p>
+              <p className="text-sm text-muted-foreground">Продаж сегодня</p>
             </CardContent>
           </Card>
         </div>

@@ -12,7 +12,7 @@ import type {
   StockLevel,
   TopPart,
 } from "@shared/schema";
-import { reasonCodeSchema } from "@shared/schema";
+import { reasonCodeSchema, REASONS } from "@shared/schema";
 import type { SmartCache } from "./smart-cache";
 
 function isSerializationError(err: unknown): boolean {
@@ -92,6 +92,10 @@ export class DatabaseStorage {
     private inventoryPool: Pool,
     private smartCache: SmartCache
   ) {}
+
+  updateSmartCache(cache: SmartCache) {
+    this.smartCache = cache;
+  }
 
   searchSmart(query: string): ArticleSearchResult[] {
     const matches = this.smartCache.search(query);
@@ -573,9 +577,8 @@ export class DatabaseStorage {
     return map;
   }
 
-  async getReasons(): Promise<Reason[]> {
-    const res = await this.inventoryPool.query<Reason>(`SELECT code, title FROM inventory.reasons ORDER BY code`);
-    return res.rows;
+  getReasons(): Reason[] {
+    return REASONS;
   }
 
   async getShippingMethods(): Promise<ShippingMethod[]> {

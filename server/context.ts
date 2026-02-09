@@ -10,6 +10,8 @@ export type AppContext = {
   storage: DatabaseStorage;
 };
 
+const SMART_CACHE_REFRESH_MS = 10 * 60 * 1000; // 10 минут
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -57,6 +59,22 @@ async function waitForDb(pool: Pool, label: string, maxWaitMs: number) {
   }
 }
 
+function startSmartCacheRefresh(ctx: AppContext) {
+  const timer = setInterval(async () => {
+    try {
+      const newCache = await loadSmartCache(ctx.pools.partsPool);
+      ctx.storage.updateSmartCache(newCache);
+      ctx.smartCache = newCache;
+      console.log(`SMART cache refreshed: ${newCache.size} entries`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`SMART cache refresh failed, keeping old cache: ${message}`);
+    }
+  }, SMART_CACHE_REFRESH_MS);
+
+  timer.unref();
+}
+
 export async function initAppContext(): Promise<AppContext> {
   const pools = createDbPoolsFromEnv();
   const maxWaitMs = getDbConnectMaxWaitMs();
@@ -71,7 +89,9 @@ export async function initAppContext(): Promise<AppContext> {
     const smartCache = await loadSmartCache(pools.partsPool);
     const storage = new DatabaseStorage(pools.inventoryPool, smartCache);
 
-    return { pools, smartCache, storage };
+    const ctx: AppContext = { pools, smartCache, storage };
+    startSmartCacheRefresh(ctx);
+    return ctx;
   } catch (err) {
     try {
       await pools.partsPool.end();

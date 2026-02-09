@@ -110,13 +110,6 @@ export default function StockLevels() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <header className="bg-card border-b border-border sticky top-0 z-10">
-        <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Остатки</h2>
-          <p className="text-sm text-muted-foreground mt-1">Текущие остатки из представления inventory.stock</p>
-        </div>
-      </header>
-
       <div className="p-8">
         <Card>
           <CardHeader>

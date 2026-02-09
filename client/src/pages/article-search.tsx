@@ -79,13 +79,6 @@ export default function ArticleSearch() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <header className="bg-card border-b border-border sticky top-0 z-10">
-        <div className="px-8 py-4">
-          <h2 className="text-2xl font-bold text-foreground">Поиск артикулов</h2>
-          <p className="text-sm text-muted-foreground mt-1">Поиск SMART кодов по вариантам артикулов</p>
-        </div>
-      </header>
-
       <div className="p-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Search Card */}

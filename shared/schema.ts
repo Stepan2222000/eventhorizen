@@ -27,6 +27,14 @@ export type Reason = {
   title: string;
 };
 
+export const REASONS: Reason[] = [
+  { code: "purchase", title: "Покупка" },
+  { code: "sale", title: "Продажа" },
+  { code: "return", title: "Возврат" },
+  { code: "writeoff", title: "Списание" },
+  { code: "adjust", title: "Корректировка" },
+];
+
 export type ShippingMethod = {
   id: number;
   name: string;
