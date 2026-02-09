@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
+import { Page } from "@/components/page";
 import type { Movement } from "@shared/schema";
 
 export default function MovementHistory() {
@@ -44,27 +45,26 @@ export default function MovementHistory() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Все движения</CardTitle>
-              <div className="relative">
-                <Input
-                  placeholder="Фильтр движений..."
-                  className="w-64 pl-9 text-sm"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  data-testid="input-filter-movements"
-                />
-                <i className="fas fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs"></i>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-md border">
-              <Table>
+    <Page
+      title="История движений"
+      description="Все изменения остатков"
+      actions={
+        <div className="relative">
+          <Input
+            placeholder="Фильтр (SMART/артикулы/причина/заметка)..."
+            className="w-full pl-9 text-sm sm:w-72"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            data-testid="input-filter-movements"
+          />
+          <i className="fas fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs"></i>
+        </div>
+      }
+    >
+      <Card>
+        <CardContent className="pt-6">
+          <div className="rounded-md border">
+            <Table>
                 <TableHeader>
                     <TableRow>
                       <TableHead className="w-[140px]">Дата/Время</TableHead>
@@ -125,19 +125,18 @@ export default function MovementHistory() {
                   )}
                 </TableBody>
               </Table>
-            </div>
+          </div>
             
-            {!isLoading && (
-              <div className="flex items-center justify-between px-2 py-4">
-                <div className="text-sm text-muted-foreground">
-                  Показано <span className="font-semibold text-foreground">{filteredMovements.length}</span> движений
-                  {filter && <span> (отфильтровано из {(movements as Movement[] || []).length} всего)</span>}
-                </div>
+          {!isLoading && (
+            <div className="flex items-center justify-between px-2 py-4">
+              <div className="text-sm text-muted-foreground">
+                Показано <span className="font-semibold text-foreground">{filteredMovements.length}</span> движений
+                {filter && <span> (отфильтровано из {(movements as Movement[] || []).length} всего)</span>}
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </Page>
   );
 }

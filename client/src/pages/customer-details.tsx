@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import type { Customer, OrderSummary } from "@shared/schema";
 
 type CustomerDetailsResponse = {
@@ -91,136 +92,202 @@ export default function CustomerDetailsPage() {
 
   if (!Number.isFinite(customerId)) {
     return (
-      <div className="p-8">
+      <Page title="Клиент" description="Некорректный ID клиента">
         <p className="text-sm text-muted-foreground">Некорректный ID клиента</p>
-      </div>
+      </Page>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="p-8">
+      <Page title="Клиент" description="Загрузка данных клиента...">
         <p className="text-sm text-muted-foreground">Загрузка данных клиента...</p>
-      </div>
+      </Page>
     );
   }
 
   if (!data) {
     return (
-      <div className="p-8">
+      <Page title="Клиент" description="Клиент не найден">
         <p className="text-sm text-muted-foreground">Клиент не найден</p>
-      </div>
+      </Page>
     );
   }
 
   const customer = data.customer;
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">{customer.name}</h1>
-            <p className="text-sm text-muted-foreground mt-1">Карточка клиента и история заказов</p>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/customers">
-              <Button variant="outline">К списку клиентов</Button>
-            </Link>
-            <Link href="/orders">
-              <Button variant="outline">К заказам</Button>
-            </Link>
-          </div>
+    <Page
+      title={customer.name}
+      description="Карточка клиента и история заказов"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <Link href="/customers">
+            <Button variant="outline">К списку клиентов</Button>
+          </Link>
+          <Link href="/orders">
+            <Button variant="outline">К заказам</Button>
+          </Link>
+        </div>
+      }
+    >
+      <div className="space-y-6">
+        {/* --- Данные клиента --- */}
+        <Card className="border-dashed">
+          <CardContent className="pt-5 pb-4">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <i className="fas fa-user-pen text-sm"></i>
+              </div>
+              <CardTitle className="text-base">Данные клиента</CardTitle>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1.5fr_auto] gap-3 items-end">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Имя <span className="text-destructive">*</span></label>
+                <div className="relative">
+                  <i className="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-xs"></i>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Имя"
+                    className="pl-8"
+                    data-testid="input-edit-customer-name"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Телефон</label>
+                <div className="relative">
+                  <i className="fas fa-phone absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-xs"></i>
+                  <Input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+7 999 123-45-67"
+                    className="pl-8"
+                    data-testid="input-edit-customer-phone"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Заметка</label>
+                <div className="relative">
+                  <i className="fas fa-comment absolute left-3 top-2.5 text-muted-foreground/50 text-xs"></i>
+                  <Textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    rows={1}
+                    placeholder="Любая дополнительная информация"
+                    className="pl-8 min-h-9 resize-none"
+                    data-testid="textarea-edit-customer-note"
+                  />
+                </div>
+              </div>
+              <Button
+                onClick={() => updateMutation.mutate()}
+                disabled={updateMutation.isPending || !name.trim()}
+                className="h-9 px-5"
+                data-testid="button-save-customer"
+              >
+                <i className="fas fa-check mr-2 text-xs"></i>
+                {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* --- Статистика --- */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardContent className="pt-5 pb-4 flex items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600">
+                <i className="fas fa-box text-base"></i>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Заказов</p>
+                <p className="text-2xl font-bold tracking-tight">{data.stats.ordersCount}</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-5 pb-4 flex items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+                <i className="fas fa-ruble-sign text-base"></i>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Сумма заказов</p>
+                <p className="text-2xl font-bold tracking-tight">{formatCurrency(data.stats.totalAmount)}</p>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-5 pb-4 flex items-center gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600">
+                <i className="fas fa-rotate-left text-base"></i>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Возвратов</p>
+                <p className="text-2xl font-bold tracking-tight">{data.stats.returnsCount}</p>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
+        {/* --- Заказы клиента --- */}
         <Card>
           <CardHeader>
-            <CardTitle>Данные клиента</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Имя"
-              data-testid="input-edit-customer-name"
-            />
-            <Input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Телефон"
-              data-testid="input-edit-customer-phone"
-            />
-            <Textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={1}
-              placeholder="Заметка"
-              data-testid="textarea-edit-customer-note"
-            />
-            <Button
-              onClick={() => updateMutation.mutate()}
-              disabled={updateMutation.isPending}
-              data-testid="button-save-customer"
-            >
-              {updateMutation.isPending ? "Сохранение..." : "Сохранить"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Статистика</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <p className="text-xs text-muted-foreground">Количество заказов</p>
-              <p className="text-xl font-semibold">{data.stats.ordersCount}</p>
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <i className="fas fa-cart-shopping text-sm"></i>
+              </div>
+              <CardTitle className="text-base">Заказы клиента</CardTitle>
+              {data.orders.length > 0 && (
+                <span className="ml-1 text-xs text-muted-foreground">({data.orders.length})</span>
+              )}
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Сумма заказов</p>
-              <p className="text-xl font-semibold">{formatCurrency(data.stats.totalAmount)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Количество возвратов</p>
-              <p className="text-xl font-semibold">{data.stats.returnsCount}</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Заказы клиента</CardTitle>
           </CardHeader>
           <CardContent>
             {data.orders.length === 0 ? (
-              <p className="text-sm text-muted-foreground">У клиента пока нет заказов</p>
+              <div className="text-center py-8 text-muted-foreground">
+                <i className="fas fa-inbox text-3xl mb-3 opacity-30"></i>
+                <p className="text-sm">У клиента пока нет заказов</p>
+              </div>
             ) : (
               <div className="space-y-2">
                 {data.orders.map((order) => (
-                  <div
+                  <Link
                     key={order.id}
-                    className="rounded-md border p-3 flex items-center justify-between gap-4"
-                    data-testid={`row-customer-order-${order.id}`}
+                    href={`/orders/${order.id}`}
+                    className="block"
                   >
-                    <div>
-                      <p className="font-semibold">Заказ #{order.id}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{formatDate(order.createdAt)}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {order.positionsCount} поз., {order.totalQty} шт · {formatCurrency(order.itemsTotal)}
-                      </p>
+                    <div
+                      className="rounded-lg border p-3.5 flex items-center justify-between gap-4 transition-colors hover:bg-muted/50 cursor-pointer"
+                      data-testid={`row-customer-order-${order.id}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground font-bold text-sm">
+                          #{order.id}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-sm">Заказ #{order.id}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatDate(order.createdAt)} · {order.positionsCount} поз., {order.totalQty} шт
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-semibold text-sm">{formatCurrency(order.itemsTotal)}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          <i className="fas fa-arrow-right text-[10px]"></i>
+                        </p>
+                      </div>
                     </div>
-                    <Link href={`/orders/${order.id}`}>
-                      <Button variant="outline" size="sm">
-                        Открыть
-                      </Button>
-                    </Link>
-                  </div>
+                  </Link>
                 ))}
               </div>
             )}
           </CardContent>
         </Card>
       </div>
-    </div>
+    </Page>
   );
 }

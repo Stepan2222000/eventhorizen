@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Page } from "@/components/page";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import type { BulkImportResult } from "@shared/schema";
@@ -137,9 +137,8 @@ export default function BulkImport() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8">
-        <div className="max-w-4xl mx-auto space-y-6">
+    <Page title="Массовая загрузка" description="Импорт движений из Excel или CSV" containerClassName="max-w-4xl">
+      <div className="space-y-6">
           {/* File Upload Card */}
           <Card>
             <CardHeader>
@@ -224,7 +223,9 @@ export default function BulkImport() {
                     <span>Обработка файла...</span>
                     <span>Пожалуйста, подождите</span>
                   </div>
-                  <Progress value={undefined} className="h-2" />
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div className="h-full w-1/2 bg-primary/60 animate-pulse" />
+                  </div>
                 </div>
               )}
             </CardContent>
@@ -343,7 +344,7 @@ export default function BulkImport() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div className="text-center p-4 bg-muted rounded-lg">
                     <div className="text-2xl font-bold font-mono">{importResult.totalRows}</div>
                     <div className="text-sm text-muted-foreground">Всего строк</div>
@@ -390,8 +391,7 @@ export default function BulkImport() {
               </CardContent>
             </Card>
           )}
-        </div>
       </div>
-    </div>
+    </Page>
   );
 }

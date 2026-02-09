@@ -39,7 +39,6 @@ EventHorizon/
 #### `/client/src/pages` - Страницы приложения
 
 - `dashboard.tsx` - Главная панель с основной статистикой
-- `article-search.tsx` - Поиск по SMART/артикулам в SMART-справочнике
 - `add-movement.tsx` - Добавление складских операций (purchase/sale/writeoff/adjust)
 - `stock-levels.tsx` - Текущие уровни запасов
 - `stock-details.tsx` - Детали товара по SMART-коду + аналитика покупок/продаж
@@ -54,8 +53,6 @@ EventHorizon/
 
 **Кастомные компоненты:**
 - `sidebar.tsx` - Боковая панель навигации
-- `disambiguation-modal.tsx` - Модальное окно для выбора из нескольких вариантов артикулов
-
 **`/client/src/components/ui` - UI библиотека (shadcn/ui):**
 
 Переиспользуемые UI компоненты на базе Radix UI и Tailwind CSS:

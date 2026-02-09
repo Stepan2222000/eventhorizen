@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import type { Customer } from "@shared/schema";
 
 export default function CustomersPage() {
@@ -85,52 +86,78 @@ export default function CustomersPage() {
   });
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Клиенты</h1>
-            <p className="text-sm text-muted-foreground mt-1">Поиск, добавление и архивирование клиентов</p>
-          </div>
-          <Link href="/orders">
-            <Button variant="outline">
-              <i className="fas fa-cart-shopping mr-2"></i>
-              К заказам
-            </Button>
-          </Link>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Добавить клиента</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Имя *"
-              data-testid="input-customer-name"
-            />
-            <Input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Телефон"
-              data-testid="input-customer-phone"
-            />
-            <Textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Заметка"
-              rows={1}
-              data-testid="textarea-customer-note"
-            />
-            <Button
-              onClick={() => createMutation.mutate()}
-              disabled={createMutation.isPending}
-              data-testid="button-create-customer"
-            >
-              {createMutation.isPending ? "Сохранение..." : "Создать клиента"}
-            </Button>
+    <Page
+      title="Клиенты"
+      description="Поиск, добавление и архивирование клиентов"
+      actions={
+        <Link href="/orders">
+          <Button variant="outline">
+            <i className="fas fa-cart-shopping mr-2"></i>
+            К заказам
+          </Button>
+        </Link>
+      }
+    >
+      <div className="space-y-6">
+        <Card className="border-dashed">
+          <CardContent className="pt-5 pb-4">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <i className="fas fa-user-plus text-sm"></i>
+              </div>
+              <CardTitle className="text-base">Новый клиент</CardTitle>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1.5fr_auto] gap-3 items-end">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Имя <span className="text-destructive">*</span></label>
+                <div className="relative">
+                  <i className="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-xs"></i>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Иван Иванов"
+                    className="pl-8"
+                    data-testid="input-customer-name"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Телефон</label>
+                <div className="relative">
+                  <i className="fas fa-phone absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 text-xs"></i>
+                  <Input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+7 999 123-45-67"
+                    className="pl-8"
+                    data-testid="input-customer-phone"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Заметка</label>
+                <div className="relative">
+                  <i className="fas fa-comment absolute left-3 top-2.5 text-muted-foreground/50 text-xs"></i>
+                  <Textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="Любая дополнительная информация"
+                    rows={1}
+                    className="pl-8 min-h-9 resize-none"
+                    data-testid="textarea-customer-note"
+                  />
+                </div>
+              </div>
+              <Button
+                onClick={() => createMutation.mutate()}
+                disabled={createMutation.isPending || !name.trim()}
+                className="h-9 px-5"
+                data-testid="button-create-customer"
+              >
+                <i className="fas fa-plus mr-2 text-xs"></i>
+                {createMutation.isPending ? "Сохранение..." : "Создать"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -146,7 +173,7 @@ export default function CustomersPage() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Поиск по имени или телефону"
-                  className="w-72"
+                  className="w-full sm:w-72"
                   data-testid="input-customers-search"
                 />
                 <Button
@@ -199,6 +226,6 @@ export default function CustomersPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </Page>
   );
 }

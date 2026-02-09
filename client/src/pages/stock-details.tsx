@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Page } from "@/components/page";
 import type { Movement } from "@shared/schema";
 import { format } from "date-fns";
 
@@ -137,15 +138,14 @@ export default function StockDetails() {
 
   if (!smart) {
     return (
-      <div className="flex-1 flex items-center justify-center">
+      <Page title="SMART" description="SMART код не указан">
         <p className="text-muted-foreground">SMART код не указан</p>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-background">
-      <div className="p-8 max-w-7xl mx-auto">
+    <Page title={`SMART ${smart}`} description="Детализация покупок и продаж" containerClassName="max-w-7xl">
         <Card className="bg-card border-border mb-6">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -171,7 +171,7 @@ export default function StockDetails() {
           </CardHeader>
           {purchases && purchases.length > 0 && (
             <CardContent>
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Всего покупок</p>
                   <p className="text-2xl font-semibold text-foreground">{purchases.length}</p>
@@ -226,7 +226,7 @@ export default function StockDetails() {
             ) : (
               <>
                 <div className="relative max-h-[300px] overflow-auto border rounded-md">
-                  <table className="w-full caption-bottom text-sm">
+                  <Table>
                     <thead className="[&_tr]:border-b bg-muted/50">
                       <tr className="border-b transition-colors">
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[120px]">Дата</th>
@@ -284,14 +284,17 @@ export default function StockDetails() {
                                 </Button>
                               </div>
                             ) : (
-                              <button
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => handleEditStart(purchase.id, 'qtyDelta', Math.abs(purchase.qtyDelta))}
-                                className="w-full text-right font-mono font-semibold hover:bg-muted px-2 py-1 rounded transition-colors group"
+                                className="h-auto w-full justify-end font-mono font-semibold px-2 py-1 rounded transition-colors group"
                                 data-testid={`button-edit-qty-${purchase.id}`}
                               >
                                 <span>{Math.abs(purchase.qtyDelta)}</span>
                                 <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </button>
+                              </Button>
                             )}
                           </td>
                           <td className="p-4 align-middle text-right">
@@ -332,14 +335,17 @@ export default function StockDetails() {
                                 </Button>
                               </div>
                             ) : (
-                              <button
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => handleEditStart(purchase.id, 'purchasePrice', purchase.purchasePrice)}
-                                className="w-full text-right font-mono hover:bg-muted px-2 py-1 rounded transition-colors group"
+                                className="h-auto w-full justify-end font-mono px-2 py-1 rounded transition-colors group"
                                 data-testid={`button-edit-price-${purchase.id}`}
                               >
                                 <span>{purchase.purchasePrice ? `${purchase.purchasePrice} ₽` : "—"}</span>
                                 <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </button>
+                              </Button>
                             )}
                           </td>
                           <td className="p-4 align-middle">
@@ -380,14 +386,17 @@ export default function StockDetails() {
                                 </div>
                               </div>
                             ) : (
-                              <button
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => handleEditStart(purchase.id, 'note', purchase.note)}
-                                className="w-full text-left hover:bg-muted px-2 py-1 rounded transition-colors group"
+                                className="h-auto w-full justify-start px-2 py-1 text-left rounded transition-colors group"
                                 data-testid={`button-edit-note-${purchase.id}`}
                               >
                                 <span className="text-foreground whitespace-pre-wrap">{purchase.note || "—"}</span>
                                 <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </button>
+                              </Button>
                             )}
                           </td>
                           <td className="p-4 align-middle whitespace-nowrap">
@@ -427,16 +436,19 @@ export default function StockDetails() {
                                 </Button>
                               </div>
                             ) : (
-                              <button
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => handleEditStart(purchase.id, 'boxNumber', purchase.boxNumber)}
-                                className="hover:bg-muted px-2 py-1 rounded transition-colors group inline-flex items-center"
+                                className="h-auto px-2 py-1 rounded transition-colors group inline-flex items-center"
                                 data-testid={`button-edit-box-${purchase.id}`}
                               >
                                 <Badge variant="outline" className="font-mono whitespace-nowrap">
                                   {purchase.boxNumber || "—"}
                                 </Badge>
                                 <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </button>
+                              </Button>
                             )}
                           </td>
                           <td className="p-4 align-middle text-right font-mono font-bold whitespace-nowrap">
@@ -445,7 +457,7 @@ export default function StockDetails() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </Table>
                 </div>
                 
                 <div className="mt-4 text-sm text-muted-foreground">
@@ -501,7 +513,7 @@ export default function StockDetails() {
                       <p className="text-xs text-muted-foreground mb-1">Средняя доходность</p>
                       <p
                         className={`text-2xl font-bold ${
-                          salesData.metrics.averageProfitPerUnit >= 0 ? "text-green-600" : "text-red-600"
+                          salesData.metrics.averageProfitPerUnit >= 0 ? "text-success" : "text-destructive"
                         }`}
                         data-testid="metric-avg-profit"
                       >
@@ -516,7 +528,7 @@ export default function StockDetails() {
                       <p className="text-xs text-muted-foreground mb-1">Процент доходности</p>
                       <p
                         className={`text-2xl font-bold ${
-                          salesData.metrics.averageProfitMarginPercent >= 0 ? "text-green-600" : "text-red-600"
+                          salesData.metrics.averageProfitMarginPercent >= 0 ? "text-success" : "text-destructive"
                         }`}
                         data-testid="metric-avg-margin"
                       >
@@ -529,7 +541,7 @@ export default function StockDetails() {
 
                 {/* Sales Table */}
                 <div className="relative max-h-[300px] overflow-auto border rounded-md">
-                  <table className="w-full caption-bottom text-sm">
+                  <Table>
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Дата</th>
@@ -583,12 +595,12 @@ export default function StockDetails() {
                             </div>
                           </td>
                           <td className="p-4 align-middle text-right font-mono font-bold">
-                            <span className={sale.profit >= 0 ? "text-green-600" : "text-red-600"}>
+                            <span className={sale.profit >= 0 ? "text-success" : "text-destructive"}>
                               {sale.profit >= 0 ? "+" : ""}{sale.profit.toFixed(2)} ₽
                             </span>
                           </td>
                           <td className="p-4 align-middle text-right font-mono font-bold">
-                            <span className={sale.profitMarginPercent >= 0 ? "text-green-600" : "text-red-600"}>
+                            <span className={sale.profitMarginPercent >= 0 ? "text-success" : "text-destructive"}>
                               {sale.profitMarginPercent >= 0 ? "+" : ""}{sale.profitMarginPercent.toFixed(1)}%
                             </span>
                           </td>
@@ -600,7 +612,7 @@ export default function StockDetails() {
                         </tr>
                       ))}
                     </tbody>
-                  </table>
+                  </Table>
                 </div>
 
                 <div className="mt-4 text-sm text-muted-foreground">
@@ -614,7 +626,6 @@ export default function StockDetails() {
             )}
           </CardContent>
         </Card>
-      </div>
-    </div>
+    </Page>
   );
 }

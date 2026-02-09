@@ -28,7 +28,7 @@ class SupportsSmartCacheUpdate(Protocol):
 StorageFactory = Callable[[asyncpg.Pool, SmartCache], Any]
 
 
-@dataclass(slots=True)
+@dataclass
 class AppContext:
     pools: DbPools
     smart_cache: SmartCache

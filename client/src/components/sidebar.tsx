@@ -1,66 +1,147 @@
+import * as React from "react";
 import { Link, useLocation } from "wouter";
+import {
+  BarChart3,
+  DatabaseZap,
+  FileUp,
+  History,
+  LayoutDashboard,
+  PackageX,
+  PlusCircle,
+  ShoppingCart,
+  Trophy,
+  Users,
+  Warehouse,
+} from "lucide-react";
+
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+  SidebarSeparator,
+} from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
-const navigation = [
-  { name: 'Главная', href: '/', icon: 'fas fa-chart-line' },
-  { name: 'Поиск артикулов', href: '/search', icon: 'fas fa-magnifying-glass' },
-  { name: 'Добавить движение', href: '/movement', icon: 'fas fa-plus-circle' },
-  { name: 'Клиенты', href: '/customers', icon: 'fas fa-users' },
-  { name: 'Остатки', href: '/stock', icon: 'fas fa-warehouse' },
-  { name: 'История движений', href: '/history', icon: 'fas fa-clock-rotate-left' },
-  { name: 'Заказы', href: '/orders', icon: 'fas fa-shopping-cart' },
-  { name: 'Распроданные товары', href: '/sold-out', icon: 'fas fa-box-open' },
-  { name: 'Топ запчастей', href: '/top-parts', icon: 'fas fa-trophy' },
-  { name: 'Массовая загрузка', href: '/import', icon: 'fas fa-file-import' },
+type NavItem = {
+  title: string;
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+};
+
+const navigation: NavItem[] = [
+  { title: "Главная", href: "/", icon: LayoutDashboard },
+  { title: "Добавить движение", href: "/movement", icon: PlusCircle },
+  { title: "Клиенты", href: "/customers", icon: Users },
+  { title: "Остатки", href: "/stock", icon: Warehouse },
+  { title: "История движений", href: "/history", icon: History },
+  { title: "Заказы", href: "/orders", icon: ShoppingCart },
+  { title: "Распроданные товары", href: "/sold-out", icon: PackageX },
+  { title: "Топ запчастей", href: "/top-parts", icon: BarChart3 },
+  { title: "Массовая загрузка", href: "/import", icon: FileUp },
 ];
 
-export function Sidebar() {
+export function AppSidebar({ className, ...props }: React.ComponentProps<typeof Sidebar>) {
   const [location] = useLocation();
 
   return (
-    <aside className="w-64 bg-card border-r border-border flex flex-col">
-      <div className="p-6 border-b border-border">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-            <i className="fas fa-boxes-stacked text-white text-lg"></i>
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-foreground">SMART Инвентаризация</h1>
-            <p className="text-xs text-muted-foreground">Система учёта</p>
+    <Sidebar
+      collapsible="offcanvas"
+      className={cn("border-r", className)}
+      {...props}
+    >
+      <SidebarHeader className="border-b">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild size="lg" tooltip="SMART Инвентаризация" className="hover:bg-transparent active:bg-transparent">
+              <Link href="/">
+                <div className="flex aspect-square size-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm ring-1 ring-border/40">
+                  <Trophy className="size-4" />
+                </div>
+                <div className="grid flex-1 text-left leading-tight">
+                  <span className="truncate font-semibold">SMART Инвентаризация</span>
+                  <span className="truncate text-xs text-muted-foreground">Система учета</span>
+                </div>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup className="pt-2">
+          <SidebarGroupLabel className="px-2 text-[11px] font-semibold tracking-wide text-muted-foreground/80">
+            Навигация
+          </SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-1">
+              {navigation.map((item) => {
+                const Icon = item.icon;
+                const isActive = location === item.href;
+                return (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      tooltip={item.title}
+                      className={cn(
+                        "group relative h-10 rounded-lg px-2.5",
+                        "hover:bg-muted/40 active:bg-muted/50",
+                        "data-[active=true]:bg-gradient-to-r data-[active=true]:from-primary/12 data-[active=true]:to-transparent data-[active=true]:shadow-sm",
+                        "data-[active=true]:before:absolute data-[active=true]:before:left-0 data-[active=true]:before:top-1/2 data-[active=true]:before:h-5 data-[active=true]:before:w-1 data-[active=true]:before:-translate-y-1/2 data-[active=true]:before:rounded-r-full data-[active=true]:before:bg-primary",
+                      )}
+                    >
+                      <Link href={item.href}>
+                        <span
+                          className={cn(
+                            "flex size-8 items-center justify-center rounded-md ring-1 ring-border/50 transition-colors",
+                            isActive
+                              ? "bg-primary/12 text-primary"
+                              : "bg-muted/30 text-muted-foreground group-hover:bg-muted/50 group-hover:text-foreground"
+                          )}
+                        >
+                          <Icon className="size-4" />
+                        </span>
+                        <span className={cn("truncate text-[13px]", isActive && "text-foreground")}>
+                          {item.title}
+                        </span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarSeparator />
+        <div className="rounded-xl border bg-gradient-to-b from-muted/40 to-transparent px-3 py-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="relative flex size-8 items-center justify-center rounded-lg bg-success/10 text-success ring-1 ring-success/20">
+              <DatabaseZap className="size-4" />
+              <span className="absolute -right-0.5 -top-0.5 flex size-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-40" />
+                <span className="relative inline-flex size-2 rounded-full bg-success" />
+              </span>
+            </div>
+            <div className="min-w-0">
+              <div className="text-[11px] leading-4 text-muted-foreground">Статус БД</div>
+              <div className="truncate font-mono text-xs font-medium text-foreground">Подключено</div>
+            </div>
           </div>
         </div>
-      </div>
+      </SidebarFooter>
 
-      <nav className="flex-1 p-4 space-y-1">
-        {navigation.map((item) => (
-          <Link 
-            key={item.href} 
-            href={item.href}
-            className={cn(
-              "flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-all duration-200 hover:bg-accent",
-              location === item.href 
-                ? "bg-primary text-primary-foreground" 
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <i className={`${item.icon} w-5`}></i>
-            <span>{item.name}</span>
-          </Link>
-        ))}
-      </nav>
-
-      <div className="p-4 border-t border-border">
-        <div className="flex items-center gap-3 p-3 rounded-lg bg-muted">
-          <div className="flex gap-2">
-            <div className="w-2 h-2 rounded-full bg-success animate-pulse"></div>
-            <div className="w-2 h-2 rounded-full bg-primary animate-pulse" style={{animationDelay: '0.2s'}}></div>
-          </div>
-          <div className="flex-1 text-xs">
-            <div className="text-muted-foreground">Статус БД</div>
-            <div className="font-medium font-mono text-foreground">Подключено</div>
-          </div>
-        </div>
-      </div>
-    </aside>
+      <SidebarRail />
+    </Sidebar>
   );
 }

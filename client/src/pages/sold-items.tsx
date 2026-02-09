@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import type { ArticleSearchResult, Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
 
 type OrderItemDraft = {
@@ -279,20 +280,19 @@ export default function SoldItems() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Заказы</h1>
-            <p className="text-sm text-muted-foreground mt-1">Продажи оформляются через заказы с клиентами и отправками</p>
-          </div>
-          <Link href="/customers">
-            <Button variant="outline" data-testid="button-open-customers">
-              <i className="fas fa-users mr-2"></i>
-              Клиенты
-            </Button>
-          </Link>
-        </div>
+    <Page
+      title="Заказы"
+      description="Продажи оформляются через заказы с клиентами и отправками"
+      actions={
+        <Link href="/customers">
+          <Button variant="outline" data-testid="button-open-customers">
+            <i className="fas fa-users mr-2"></i>
+            Клиенты
+          </Button>
+        </Link>
+      }
+    >
+      <div className="space-y-6">
 
         <Card>
           <CardHeader>
@@ -667,6 +667,6 @@ export default function SoldItems() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </Page>
   );
 }

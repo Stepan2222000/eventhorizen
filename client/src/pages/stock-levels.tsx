@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import type { StockLevel } from "@shared/schema";
 
 type SortKey = "smart" | "qty";
@@ -109,31 +110,30 @@ export default function StockLevels() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Текущие остатки</CardTitle>
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <Input
-                    placeholder="Фильтр (SMART/артикулы/бренд/описание)..."
-                    className="w-48 pl-9 text-sm"
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    data-testid="input-filter-stock"
-                  />
-                  <i className="fas fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs"></i>
-                </div>
-                <Button variant="secondary" size="sm" data-testid="button-export-stock" onClick={exportToCsv}>
-                  <i className="fas fa-download mr-2"></i>
-                  Экспорт
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
+    <Page
+      title="Остатки"
+      description="Текущие остатки по SMART коду"
+      actions={
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Input
+              placeholder="Фильтр (SMART/артикулы/бренд/описание)..."
+              className="w-full pl-9 text-sm sm:w-72"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              data-testid="input-filter-stock"
+            />
+            <i className="fas fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs"></i>
+          </div>
+          <Button variant="secondary" size="sm" data-testid="button-export-stock" onClick={exportToCsv}>
+            <i className="fas fa-download mr-2"></i>
+            Экспорт
+          </Button>
+        </div>
+      }
+    >
+      <Card>
+        <CardContent className="pt-6">
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -243,9 +243,8 @@ export default function StockLevels() {
                 </div>
               </div>
             )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+        </CardContent>
+      </Card>
+    </Page>
   );
 }

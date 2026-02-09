@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Page } from "@/components/page";
 import type { TopPart } from "@shared/schema";
 import { TrendingUp, ShoppingCart, Award } from "lucide-react";
 
@@ -16,18 +19,18 @@ export default function TopParts() {
 
   if (isLoading) {
     return (
-      <div className="p-8">
-        <div className="animate-pulse">
-          <div className="h-8 bg-muted rounded w-64 mb-2"></div>
-          <div className="h-4 bg-muted rounded w-96 mb-8"></div>
-          <div className="h-64 bg-muted rounded"></div>
+      <Page title="Топ запчастей" description="Рейтинг по доходности и продажам">
+        <div className="space-y-3">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-96" />
+          <Skeleton className="h-64 w-full" />
         </div>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="p-8">
+    <Page title="Топ запчастей" description="Рейтинг по доходности и продажам">
       <Tabs value={mode} onValueChange={(value) => setMode(value as RankingMode)}>
         <TabsList className="mb-6" data-testid="tabs-ranking-mode">
           <TabsTrigger value="profit" data-testid="tab-profit">
@@ -67,83 +70,74 @@ export default function TopParts() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="relative border rounded-md">
-                  <table className="w-full">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-sm font-medium">Место</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium">SMART код</th>
-                        <th className="px-4 py-3 text-left text-sm font-medium">Название</th>
-                        <th className="px-4 py-3 text-right text-sm font-medium">Средняя доходность</th>
-                        <th className="px-4 py-3 text-right text-sm font-medium">Количество продаж</th>
-                        <th className="px-4 py-3 text-right text-sm font-medium">Процент маржи</th>
-                        <th className="px-4 py-3 text-right text-sm font-medium">Текущий остаток</th>
-                        {mode === 'combined' && (
-                          <th className="px-4 py-3 text-right text-sm font-medium">Коэффициент</th>
+                <Table>
+                  <TableHeader className="bg-muted/50">
+                    <TableRow>
+                      <TableHead className="w-[90px]">Место</TableHead>
+                      <TableHead className="w-[150px]">SMART код</TableHead>
+                      <TableHead>Название</TableHead>
+                      <TableHead className="text-right">Средняя доходность</TableHead>
+                      <TableHead className="text-right">Количество продаж</TableHead>
+                      <TableHead className="text-right">Процент маржи</TableHead>
+                      <TableHead className="text-right">Текущий остаток</TableHead>
+                      {mode === "combined" && (
+                        <TableHead className="text-right">Коэффициент</TableHead>
+                      )}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {items.map((item, index) => (
+                      <TableRow
+                        key={item.smart}
+                        data-testid={`row-toppart-${index}`}
+                      >
+                        <TableCell data-testid={`text-rank-${index}`}>
+                          <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">
+                            {index + 1}
+                          </div>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap" data-testid={`text-smart-${index}`}>
+                          <span className="font-mono font-medium">{item.smart}</span>
+                        </TableCell>
+                        <TableCell data-testid={`text-name-${index}`}>
+                          <span className="text-sm text-muted-foreground">
+                            {item.name || "—"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap" data-testid={`text-avgprofit-${index}`}>
+                          <span className={`font-medium ${item.avgProfit >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {item.avgProfit.toFixed(2)} ₽
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right" data-testid={`text-totalsales-${index}`}>
+                          <span className="font-medium">{item.totalSales}</span>
+                        </TableCell>
+                        <TableCell className="text-right whitespace-nowrap" data-testid={`text-margin-${index}`}>
+                          <span className={`font-medium ${item.profitMargin >= 0 ? "text-green-600" : "text-red-600"}`}>
+                            {item.profitMargin.toFixed(1)}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right" data-testid={`text-stock-${index}`}>
+                          <span className={item.currentStock > 0 ? "" : "text-muted-foreground"}>
+                            {item.currentStock}
+                          </span>
+                        </TableCell>
+                        {mode === "combined" && (
+                          <TableCell className="text-right" data-testid={`text-score-${index}`}>
+                            <span className="font-medium text-primary">
+                              {item.combinedScore?.toFixed(1)}
+                            </span>
+                          </TableCell>
                         )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((item, index) => (
-                        <tr
-                          key={item.smart}
-                          className="border-b"
-                          data-testid={`row-toppart-${index}`}
-                        >
-                          <td className="px-4 py-4 align-middle" data-testid={`text-rank-${index}`}>
-                            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-bold">
-                              {index + 1}
-                            </div>
-                          </td>
-                          <td className="px-4 py-4 align-middle whitespace-nowrap" data-testid={`text-smart-${index}`}>
-                            <span className="font-mono font-medium">{item.smart}</span>
-                          </td>
-                          <td className="px-4 py-4 align-middle" data-testid={`text-name-${index}`}>
-                            <span className="text-sm text-muted-foreground">
-                              {item.name || '—'}
-                            </span>
-                          </td>
-                          <td
-                            className="px-4 py-4 align-middle text-right whitespace-nowrap"
-                            data-testid={`text-avgprofit-${index}`}
-                          >
-                            <span className={`font-medium ${item.avgProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {item.avgProfit.toFixed(2)} ₽
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 align-middle text-right" data-testid={`text-totalsales-${index}`}>
-                            <span className="font-medium">{item.totalSales}</span>
-                          </td>
-                          <td
-                            className="px-4 py-4 align-middle text-right whitespace-nowrap"
-                            data-testid={`text-margin-${index}`}
-                          >
-                            <span className={`font-medium ${item.profitMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {item.profitMargin.toFixed(1)}%
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 align-middle text-right" data-testid={`text-stock-${index}`}>
-                            <span className={item.currentStock > 0 ? '' : 'text-muted-foreground'}>
-                              {item.currentStock}
-                            </span>
-                          </td>
-                          {mode === 'combined' && (
-                            <td className="px-4 py-4 align-middle text-right" data-testid={`text-score-${index}`}>
-                              <span className="font-medium text-primary">
-                                {item.combinedScore?.toFixed(1)}
-                              </span>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </CardContent>
             </Card>
           )}
         </TabsContent>
       </Tabs>
-    </div>
+    </Page>
   );
 }

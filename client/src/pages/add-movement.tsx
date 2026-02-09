@@ -13,6 +13,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import { insertMovementSchema } from "@shared/schema";
 import type { ArticleSearchResult, InsertMovement, Reason } from "@shared/schema";
 import { z } from "zod";
@@ -305,33 +306,20 @@ export default function AddMovement() {
     createMovementMutation.mutate(data);
   };
 
-  const incrementQty = () => {
-    const currentValue = form.getValues("qtyDelta");
-    form.setValue("qtyDelta", currentValue + 1);
-    void form.trigger("qtyDelta");
-  };
-
-  const decrementQty = () => {
-    const currentValue = form.getValues("qtyDelta");
-    form.setValue("qtyDelta", currentValue - 1);
-    void form.trigger("qtyDelta");
-  };
-
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8">
-        <div className="max-w-2xl mx-auto">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold text-foreground">Ввод движения</div>
-                  <p className="text-sm text-muted-foreground mt-1">Поиск по артикулам или SMART, затем заполнение операции</p>
-                </div>
-                <i className="fas fa-plus-circle text-muted-foreground text-xl"></i>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
+    <Page
+      title="Ввод движения"
+      description="Поиск по артикулам или SMART, затем заполнение операции"
+      containerClassName="max-w-2xl"
+    >
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Параметры движения</span>
+            <i className="fas fa-plus-circle text-muted-foreground text-xl"></i>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
               <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -462,7 +450,7 @@ export default function AddMovement() {
                     )}
                   />
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     {/* qty */}
                     <FormField
                       control={form.control}
@@ -472,41 +460,23 @@ export default function AddMovement() {
                           <FormLabel>
                             Изменение количества <span className="text-destructive">*</span>
                           </FormLabel>
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={decrementQty}
-                              data-testid="button-decrement-qty"
-                              className="text-orange-600 hover:text-orange-700 hover:bg-orange-50"
-                            >
-                              <i className="fas fa-minus"></i>
-                            </Button>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                className="font-mono text-center"
-                                value={field.value ?? 0}
-                                onChange={(e) => {
-                                  const val = Number.parseInt(e.target.value, 10);
-                                  field.onChange(Number.isFinite(val) ? val : 0);
-                                  void form.trigger("qtyDelta");
-                                }}
-                                data-testid="input-qty-delta"
-                              />
-                            </FormControl>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="icon"
-                              onClick={incrementQty}
-                              data-testid="button-increment-qty"
-                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                            >
-                              <i className="fas fa-plus"></i>
-                            </Button>
-                          </div>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min={-999999}
+                              max={999999}
+                              step={1}
+                              placeholder="0"
+                              className="font-mono tabular-nums h-11 text-base"
+                              value={field.value ?? 0}
+                              onChange={(e) => {
+                                const val = Number.parseInt(e.target.value, 10);
+                                field.onChange(Number.isFinite(val) ? val : 0);
+                                void form.trigger("qtyDelta");
+                              }}
+                              data-testid="input-qty-delta"
+                            />
+                          </FormControl>
                           <FormMessage />
                         </FormItem>
                       )}
@@ -796,10 +766,8 @@ export default function AddMovement() {
                   </div>
                 </form>
               </Form>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
+        </CardContent>
+      </Card>
+    </Page>
   );
 }

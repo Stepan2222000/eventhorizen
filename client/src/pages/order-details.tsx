@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { Page } from "@/components/page";
 import type {
   DeliveryPayer,
   OrderDetails,
@@ -172,46 +173,44 @@ export default function OrderDetailsPage() {
 
   if (!Number.isFinite(orderId)) {
     return (
-      <div className="p-8">
+      <Page title="Заказ" description="Некорректный номер заказа">
         <p className="text-sm text-muted-foreground">Некорректный номер заказа</p>
-      </div>
+      </Page>
     );
   }
 
   if (isLoading) {
     return (
-      <div className="p-8">
+      <Page title="Заказ" description="Загрузка заказа...">
         <p className="text-sm text-muted-foreground">Загрузка заказа...</p>
-      </div>
+      </Page>
     );
   }
 
   if (!order) {
     return (
-      <div className="p-8">
+      <Page title="Заказ" description="Заказ не найден">
         <p className="text-sm text-muted-foreground">Заказ не найден</p>
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Заказ #{order.id}</h1>
-            <p className="text-sm text-muted-foreground mt-1">Создан: {formatDate(order.createdAt)}</p>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/orders">
-              <Button variant="outline">К заказам</Button>
-            </Link>
-            <Link href={`/customers/${order.customer.id}`}>
-              <Button variant="outline">К клиенту</Button>
-            </Link>
-          </div>
+    <Page
+      title={`Заказ #${order.id}`}
+      description={`Создан: ${formatDate(order.createdAt)}`}
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <Link href="/orders">
+            <Button variant="outline">К заказам</Button>
+          </Link>
+          <Link href={`/customers/${order.customer.id}`}>
+            <Button variant="outline">К клиенту</Button>
+          </Link>
         </div>
-
+      }
+    >
+      <div className="space-y-6">
         <Card>
           <CardHeader>
             <CardTitle>Клиент</CardTitle>
@@ -506,6 +505,6 @@ export default function OrderDetailsPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </Page>
   );
 }

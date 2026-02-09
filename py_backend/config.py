@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, PositiveInt, ValidationError, constr
 
-PgSslConfig = dict[str, bool] | None
+PgSslConfig = Optional[Dict[str, bool]]
 
 
 def get_pg_ssl_config(mode: object) -> PgSslConfig:

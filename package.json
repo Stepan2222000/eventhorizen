@@ -4,9 +4,9 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev": "vite",
     "dev:py": "NODE_ENV=development python3 -m uvicorn py_backend.main:app --host 0.0.0.0 --port 5004",
-    "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build": "vite build",
     "start": "NODE_ENV=production node dist/index.js",
     "start:py": "NODE_ENV=production python3 -m uvicorn py_backend.main:app --host 0.0.0.0 --port 5000",
     "check": "tsc"

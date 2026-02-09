@@ -4,9 +4,10 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Sidebar } from "@/components/sidebar";
+import { AppSidebar } from "@/components/sidebar";
+import { Separator } from "@/components/ui/separator";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import Dashboard from "@/pages/dashboard";
-import ArticleSearch from "@/pages/article-search";
 import AddMovement from "@/pages/add-movement";
 import StockLevels from "@/pages/stock-levels";
 import StockDetails from "@/pages/stock-details";
@@ -24,7 +25,6 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
-      <Route path="/search" component={ArticleSearch} />
       <Route path="/movement" component={AddMovement} />
       <Route path="/stock/:smart" component={StockDetails} />
       <Route path="/stock" component={StockLevels} />
@@ -50,12 +50,19 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto">
-            <Router />
-          </main>
-        </div>
+        <SidebarProvider>
+          <AppSidebar />
+          <SidebarInset>
+            <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur">
+              <SidebarTrigger className="-ml-1" />
+              <Separator orientation="vertical" className="mx-2 h-4" />
+              <div className="min-w-0 truncate text-sm font-medium">SMART Инвентаризация</div>
+            </header>
+            <div className="flex-1 overflow-y-auto">
+              <Router />
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

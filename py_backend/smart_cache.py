@@ -19,7 +19,7 @@ class Smart(BaseModel):
     description: list[str] = Field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class _SmartInternal:
     smart: str
     articles: list[str]

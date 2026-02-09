@@ -10,7 +10,7 @@ import asyncpg
 from .config import PgSslConfig, read_app_config_from_env
 
 
-@dataclass(slots=True)
+@dataclass
 class DbPools:
     parts_pool: asyncpg.Pool
     inventory_pool: asyncpg.Pool
