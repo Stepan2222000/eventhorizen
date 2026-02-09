@@ -1,76 +1,88 @@
-import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { DisambiguationModal } from "@/components/disambiguation-modal";
 import type { ArticleSearchResult } from "@shared/schema";
 
 export default function ArticleSearch() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<ArticleSearchResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<ArticleSearchResult | null>(null);
-  const [showDisambiguation, setShowDisambiguation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  
+
+  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+
   const { toast } = useToast();
-  const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
 
-  const searchMutation = useMutation({
-    mutationFn: async (query: string) => {
-      const response = await apiRequest("GET", `/api/articles/search?query=${encodeURIComponent(query)}`);
-      return response.json();
-    },
-    onSuccess: (results: ArticleSearchResult[]) => {
-      setSearchResults(results);
-      setIsSearching(false);
-      setShowDisambiguation(false);
-      
-      if (results.length === 0) {
-        toast({
-          title: "Совпадений не найдено",
-          description: `SMART код для артикула не найден: ${searchQuery}`,
-          variant: "destructive",
-        });
-      } else if (results.length === 1) {
-        setSelectedResult(results[0]);
-        toast({
-          title: "Найдено совпадение",
-          description: `Найден SMART код: ${results[0].smart}`,
-        });
-      } else {
-        setShowDisambiguation(true);
-      }
-    },
-    onError: (error) => {
-      setIsSearching(false);
-      toast({
-        title: "Ошибка поиска",
-        description: error instanceof Error ? error.message : "Не удалось выполнить поиск",
-        variant: "destructive",
-      });
-    },
-  });
+  // Cleanup debounce + abort on unmount.
+  useEffect(() => {
+    return () => {
+      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      searchAbortRef.current?.abort();
+    };
+  }, []);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    
+  const performSearch = async (query: string) => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
     setIsSearching(true);
-    setSearchResults([]);
-    setSelectedResult(null);
-    setShowDisambiguation(false);
-    searchMutation.mutate(searchQuery.trim());
+
+    try {
+      const res = await fetch(
+        `/api/articles/search?query=${encodeURIComponent(q)}&limit=15`,
+        { credentials: "include", signal: controller.signal },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      const results = (await res.json()) as ArticleSearchResult[];
+      setSearchResults(results);
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      console.error("Search error:", err);
+      setSearchResults([]);
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsSearching(false);
+      }
+    }
   };
 
-  const handleSelectMatch = (result: ArticleSearchResult) => {
+  const handleSearchInputChange = (value: string) => {
+    setSearchQuery(value);
+
+    if (selectedResult) {
+      setSelectedResult(null);
+    }
+
+    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+
+    if (!value.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    debounceTimeout.current = setTimeout(() => performSearch(value), 300);
+  };
+
+  const handleSelectResult = (result: ArticleSearchResult) => {
     setSelectedResult(result);
-    setShowDisambiguation(false);
     toast({
       title: "SMART код выбран",
       description: `Выбран: ${result.smart}`,
@@ -93,50 +105,90 @@ export default function ArticleSearch() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSearch} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    Код артикула
-                    <span className="text-muted-foreground font-normal ml-1">(любой формат)</span>
-                  </label>
-                  <div className="relative">
-                    <Input
-                      type="text"
-                      placeholder="например: ABC-123, АБЦ123, abc.123"
-                      className="font-mono pr-20"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      data-testid="input-article-search"
-                    />
-                    <Button 
-                      type="submit" 
-                      size="sm"
-                      className="absolute right-2 top-1/2 -translate-y-1/2"
-                      disabled={isSearching || !searchQuery.trim()}
-                      data-testid="button-search-article"
-                    >
-                      {isSearching ? (
-                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                      ) : (
-                        "Поиск"
-                      )}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    <i className="fas fa-info-circle mr-1"></i>
-                    Поддерживаются разные регистры, разделители и кириллица/латиница
-                  </p>
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  Код артикула
+                  <span className="text-muted-foreground font-normal ml-1">(любой формат)</span>
+                </label>
+                <div className="relative">
+                  <Input
+                    type="text"
+                    placeholder="Начните вводить артикул или SMART..."
+                    className="font-mono pr-10"
+                    value={searchQuery}
+                    onChange={(e) => handleSearchInputChange(e.target.value)}
+                    data-testid="input-article-search"
+                  />
+                  {isSearching && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  )}
                 </div>
-              </form>
+                <p className="text-xs text-muted-foreground mt-2">
+                  <i className="fas fa-info-circle mr-1"></i>
+                  Поддерживаются разные регистры, разделители и кириллица/латиница
+                </p>
+              </div>
 
-              {/* Search Status */}
-              {isSearching && (
-                <div className="border border-border rounded-lg p-4 bg-muted/50 mt-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm text-muted-foreground">Поиск в базе данных...</span>
-                  </div>
+              {/* Inline results list */}
+              {searchQuery.trim().length >= 2 && searchResults.length > 0 && (
+                <div className="mt-4 space-y-2 max-h-[60vh] overflow-y-auto">
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Найдено: {searchResults.length} {searchResults.length >= 15 ? "(показаны первые 15)" : ""}
+                  </p>
+                  {searchResults.map((result) => (
+                    <button
+                      key={result.smart}
+                      onClick={() => handleSelectResult(result)}
+                      className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
+                        selectedResult?.smart === result.smart
+                          ? "border-primary bg-primary/5"
+                          : "border-border bg-card hover:border-primary/50 hover:bg-primary/5"
+                      }`}
+                      data-testid={`select-smart-${result.smart}`}
+                    >
+                      <div className="flex items-start justify-between mb-1">
+                        <div className="font-mono font-semibold text-sm text-primary">{result.smart}</div>
+                        <div className="flex items-center gap-2">
+                          {!!result.brand?.length && result.brand.some(b => b) && (
+                            <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+                              {result.brand.filter(b => b).join(", ")}
+                            </span>
+                          )}
+                          <span className="text-xs font-mono text-muted-foreground">
+                            Остаток: <span className="font-semibold">{result.currentStock}</span>
+                          </span>
+                        </div>
+                      </div>
+                      {!!result.articles?.length && (
+                        <div className="text-xs text-muted-foreground">
+                          <span className="font-semibold">Артикулы: </span>
+                          <span className="font-mono">{result.articles.join(", ")}</span>
+                        </div>
+                      )}
+                      {!!result.description?.length && result.description.some(d => d) && (
+                        <div className="text-xs text-foreground/70 mt-0.5">
+                          {result.description.filter(d => d).join(", ")}
+                        </div>
+                      )}
+                    </button>
+                  ))}
                 </div>
+              )}
+
+              {/* Empty state: query too short */}
+              {searchQuery.trim().length === 1 && (
+                <p className="text-xs text-muted-foreground mt-4">
+                  Введите ещё минимум 1 символ для поиска
+                </p>
+              )}
+
+              {/* Empty state: no results */}
+              {searchQuery.trim().length >= 2 && !isSearching && searchResults.length === 0 && (
+                <p className="text-sm text-muted-foreground mt-4">
+                  Совпадений не найдено для «{searchQuery}»
+                </p>
               )}
             </CardContent>
           </Card>
@@ -147,10 +199,10 @@ export default function ArticleSearch() {
               <CardTitle>Результаты поиска</CardTitle>
             </CardHeader>
             <CardContent>
-              {!selectedResult && searchResults.length === 0 && !isSearching && (
+              {!selectedResult && (
                 <div className="text-center py-8 text-muted-foreground">
                   <i className="fas fa-search text-4xl mb-4"></i>
-                  <p>Введите артикул для поиска</p>
+                  <p>Выберите элемент из списка слева</p>
                 </div>
               )}
 
@@ -166,24 +218,24 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    {selectedResult.articles && (
+                    {!!selectedResult.articles?.length && (
                       <div className="flex flex-col gap-1">
                         <span className="text-muted-foreground">Артикулы:</span>
                         <span className="font-mono font-medium break-words">
-                          {Array.isArray(selectedResult.articles) ? selectedResult.articles.join(', ') : selectedResult.articles}
+                          {selectedResult.articles.join(", ")}
                         </span>
                       </div>
                     )}
-                    {selectedResult.brand && (
+                    {!!selectedResult.brand?.length && selectedResult.brand.some(b => b) && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Бренд:</span>
-                        <span className="font-medium">{Array.isArray(selectedResult.brand) ? selectedResult.brand.join(', ') : selectedResult.brand}</span>
+                        <span className="font-medium">{selectedResult.brand.filter(b => b).join(", ")}</span>
                       </div>
                     )}
-                    {selectedResult.description && (
+                    {!!selectedResult.description?.length && selectedResult.description.some(d => d) && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Описание:</span>
-                        <span className="font-medium">{Array.isArray(selectedResult.description) ? selectedResult.description.join(', ') : selectedResult.description}</span>
+                        <span className="font-medium">{selectedResult.description.filter(d => d).join(", ")}</span>
                       </div>
                     )}
                     <div className="flex justify-between">
@@ -192,8 +244,8 @@ export default function ArticleSearch() {
                     </div>
                   </div>
                   <div className="flex gap-2 mt-4">
-                    <Button 
-                      className="flex-1" 
+                    <Button
+                      className="flex-1"
                       data-testid="button-add-movement"
                       onClick={() => {
                         const params = new URLSearchParams({ smart: selectedResult.smart });
@@ -203,11 +255,11 @@ export default function ArticleSearch() {
                       <i className="fas fa-plus mr-2"></i>
                       Добавить движение
                     </Button>
-                    <Button 
-                      variant="secondary" 
-                      size="icon" 
+                    <Button
+                      variant="secondary"
+                      size="icon"
                       data-testid="button-view-history"
-                      onClick={() => setLocation('/history')}
+                      onClick={() => setLocation("/history")}
                     >
                       <i className="fas fa-history"></i>
                     </Button>
@@ -218,14 +270,6 @@ export default function ArticleSearch() {
           </Card>
         </div>
       </div>
-
-      <DisambiguationModal
-        isOpen={showDisambiguation}
-        onClose={() => setShowDisambiguation(false)}
-        onSelect={handleSelectMatch}
-        matches={searchResults}
-        searchQuery={searchQuery}
-      />
     </div>
   );
 }

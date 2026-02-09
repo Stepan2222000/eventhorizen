@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,9 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
+import type { ArticleSearchResult, Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
 
 type OrderItemDraft = {
   smart: string;
@@ -53,6 +55,11 @@ export default function SoldItems() {
   const [trackNumber, setTrackNumber] = useState("");
   const [deliveryPrice, setDeliveryPrice] = useState("0");
   const [deliveryPayer, setDeliveryPayer] = useState<DeliveryPayer>("buyer");
+  const [autocompleteResults, setAutocompleteResults] = useState<ArticleSearchResult[]>([]);
+  const [autocompleteOpenIndex, setAutocompleteOpenIndex] = useState<number | null>(null);
+  const debounceTimeout = useRef<NodeJS.Timeout | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+
   const ordersQueryKey = "/api/orders?includeArchived=1";
 
   const { data: orders = [], isLoading } = useQuery<OrderSummary[]>({
@@ -122,6 +129,63 @@ export default function SoldItems() {
         typeof query.queryKey[0] === "string" &&
         query.queryKey[0].startsWith("/api/customers"),
     });
+  };
+
+  // Cleanup debounce + abort on unmount.
+  useEffect(() => {
+    return () => {
+      if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+      searchAbortRef.current?.abort();
+    };
+  }, []);
+
+  const performSearch = async (query: string, itemIndex: number) => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setAutocompleteResults([]);
+      setAutocompleteOpenIndex(null);
+      return;
+    }
+
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    try {
+      const res = await fetch(
+        `/api/articles/search?query=${encodeURIComponent(q)}&limit=10`,
+        { credentials: "include", signal: controller.signal },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || res.statusText);
+      }
+      const results = (await res.json()) as ArticleSearchResult[];
+      setAutocompleteResults(results);
+      setAutocompleteOpenIndex(results.length > 0 ? itemIndex : null);
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
+      console.error("Autocomplete search error:", err);
+      setAutocompleteResults([]);
+      setAutocompleteOpenIndex(null);
+    }
+  };
+
+  const handleSmartInputChange = (value: string, index: number) => {
+    updateItem(index, { smart: value });
+    if (debounceTimeout.current) clearTimeout(debounceTimeout.current);
+    if (!value.trim()) {
+      setAutocompleteResults([]);
+      setAutocompleteOpenIndex(null);
+      return;
+    }
+    debounceTimeout.current = setTimeout(() => performSearch(value, index), 300);
+  };
+
+  const handleSelectSmartResult = (result: ArticleSearchResult, index: number) => {
+    updateItem(index, { smart: result.smart });
+    setAutocompleteOpenIndex(null);
+    setAutocompleteResults([]);
   };
 
   const createOrderMutation = useMutation({
@@ -310,13 +374,68 @@ export default function SoldItems() {
                 <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_120px_160px_56px] gap-3 items-end rounded-md border p-3">
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">SMART код</p>
-                    <Input
-                      value={item.smart}
-                      onChange={(e) => updateItem(index, { smart: e.target.value })}
-                      placeholder="SMART..."
-                      className="font-mono"
-                      data-testid={`input-order-item-smart-${index}`}
-                    />
+                    <Popover
+                      open={autocompleteOpenIndex === index}
+                      onOpenChange={(open) => {
+                        if (!open) setAutocompleteOpenIndex(null);
+                      }}
+                    >
+                      <PopoverTrigger asChild>
+                        <div>
+                          <Input
+                            value={item.smart}
+                            onChange={(e) => handleSmartInputChange(e.target.value, index)}
+                            placeholder="Артикул или SMART..."
+                            className="font-mono"
+                            data-testid={`input-order-item-smart-${index}`}
+                            onKeyDown={(e) => {
+                              if (e.key === "Escape") setAutocompleteOpenIndex(null);
+                            }}
+                          />
+                        </div>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="w-[var(--radix-popover-trigger-width)] p-0"
+                        align="start"
+                        onOpenAutoFocus={(e) => e.preventDefault()}
+                      >
+                        <Command>
+                          <CommandList>
+                            <CommandEmpty>Ничего не найдено</CommandEmpty>
+                            <CommandGroup heading="Найденные позиции">
+                              {autocompleteResults.map((result, idx) => (
+                                <CommandItem
+                                  key={`${result.smart}-${idx}`}
+                                  value={result.smart}
+                                  onSelect={() => handleSelectSmartResult(result, index)}
+                                  className="cursor-pointer"
+                                  data-testid={`autocomplete-order-item-${index}-${idx}`}
+                                >
+                                  <div className="flex items-start justify-between gap-3 w-full">
+                                    <div className="flex flex-col gap-1">
+                                      <div className="font-mono text-sm font-bold text-primary">{result.smart}</div>
+                                      {!!result.articles?.length && (
+                                        <div className="font-mono text-xs text-muted-foreground break-words">
+                                          {result.articles.join(", ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1">
+                                      {!!result.brand?.length && result.brand.some(b => b) && (
+                                        <div className="text-xs text-muted-foreground">{result.brand.filter(b => b).join(", ")}</div>
+                                      )}
+                                      <div className="text-xs text-muted-foreground">
+                                        Остаток: <span className="font-mono font-semibold">{result.currentStock}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Кол-во</p>

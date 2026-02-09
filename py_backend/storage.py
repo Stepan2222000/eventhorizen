@@ -227,8 +227,8 @@ class DatabaseStorage:
     def updateSmartCache(self, cache: SmartCacheProtocol) -> None:
         self.smartCache = cache
 
-    def searchSmart(self, query: str) -> list[dict[str, Any]]:
-        matches = self.smartCache.search(query)
+    def searchSmart(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        matches = self.smartCache.search(query, limit=limit)
         return [
             {
                 "smart": _obj_get(m, "smart"),

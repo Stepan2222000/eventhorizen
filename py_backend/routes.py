@@ -184,7 +184,15 @@ def register_routes(app: FastAPI) -> None:
             if not normalized or len(normalized) < 2:
                 return JSONResponse(status_code=400, content={"error": "Query parameter is too short"})
 
-            matches = storage.searchSmart(normalized)
+            limit_raw = request.query_params.get("limit")
+            limit = 50
+            if limit_raw:
+                try:
+                    limit = max(1, min(50, int(limit_raw)))
+                except (ValueError, TypeError):
+                    pass
+
+            matches = storage.searchSmart(normalized, limit=limit)
             smart_codes = [m["smart"] for m in matches]
             stock_map = await storage.getTotalStockBySmartBatch(smart_codes)
             payload = [{**m, "currentStock": stock_map.get(m["smart"], 0)} for m in matches]
