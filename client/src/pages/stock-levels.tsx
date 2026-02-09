@@ -7,10 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
 import type { StockLevel } from "@shared/schema";
+
+type SortKey = "smart" | "qty";
+type SortDirection = "asc" | "desc";
 
 export default function StockLevels() {
   const [filter, setFilter] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("smart");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+  const { toast } = useToast();
 
   const { data: stockLevels, isLoading } = useQuery({
     queryKey: ["/api/stock"],
@@ -34,6 +41,71 @@ export default function StockLevels() {
     if (qty === 0) return { label: "Нет в наличии", variant: "destructive" as const, icon: "fas fa-circle-xmark" };
     if (qty <= 10) return { label: "Мало", variant: "secondary" as const, icon: "fas fa-triangle-exclamation" };
     return { label: "В наличии", variant: "default" as const, icon: "fas fa-circle" };
+  };
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(key);
+    setSortDirection(key === "qty" ? "desc" : "asc");
+  };
+
+  const getSortIcon = (key: SortKey) => {
+    if (sortKey !== key) return "fas fa-sort";
+    return sortDirection === "asc" ? "fas fa-sort-up" : "fas fa-sort-down";
+  };
+
+  const sortedStock = [...filteredStock].sort((a, b) => {
+    if (sortKey === "qty") {
+      const diff = a.totalQty - b.totalQty;
+      return sortDirection === "asc" ? diff : -diff;
+    }
+    const diff = a.smart.localeCompare(b.smart, "ru-RU", { sensitivity: "base" });
+    return sortDirection === "asc" ? diff : -diff;
+  });
+
+  const exportToCsv = () => {
+    if (sortedStock.length === 0) {
+      toast({
+        title: "Нет данных для экспорта",
+        description: "Добавьте или снимите фильтр, чтобы экспортировать остатки",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const headers = ["SMART", "Бренд", "Описание", "Количество", "Статус"];
+    const rows = sortedStock.map((item) => {
+      const status = getStockStatus(item.totalQty).label;
+      return [
+        item.smart,
+        (item.brand || []).join(", "),
+        (item.description || []).join(", "),
+        String(item.totalQty),
+        status,
+      ];
+    });
+
+    const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `stock-levels-${timestamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    toast({
+      title: "Экспорт выполнен",
+      description: `Выгружено позиций: ${sortedStock.length}`,
+    });
   };
 
   return (
@@ -61,7 +133,7 @@ export default function StockLevels() {
                   />
                   <i className="fas fa-filter absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-xs"></i>
                 </div>
-                <Button variant="secondary" size="sm" data-testid="button-export-stock">
+                <Button variant="secondary" size="sm" data-testid="button-export-stock" onClick={exportToCsv}>
                   <i className="fas fa-download mr-2"></i>
                   Экспорт
                 </Button>
@@ -74,17 +146,29 @@ export default function StockLevels() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[150px]">
-                      <Button variant="ghost" size="sm" className="h-auto p-0 font-medium" data-testid="button-sort-smart">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto p-0 font-medium"
+                        data-testid="button-sort-smart"
+                        onClick={() => toggleSort("smart")}
+                      >
                         SMART код
-                        <i className="fas fa-sort text-xs ml-2"></i>
+                        <i className={`${getSortIcon("smart")} text-xs ml-2`}></i>
                       </Button>
                     </TableHead>
                     <TableHead>Бренд</TableHead>
                     <TableHead>Описание</TableHead>
                     <TableHead className="text-right">
-                      <Button variant="ghost" size="sm" className="h-auto p-0 font-medium ml-auto" data-testid="button-sort-qty">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto p-0 font-medium ml-auto"
+                        data-testid="button-sort-qty"
+                        onClick={() => toggleSort("qty")}
+                      >
                         Кол-во
-                        <i className="fas fa-sort text-xs ml-2"></i>
+                        <i className={`${getSortIcon("qty")} text-xs ml-2`}></i>
                       </Button>
                     </TableHead>
                     <TableHead className="text-center">Статус</TableHead>
@@ -110,7 +194,7 @@ export default function StockLevels() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredStock.map((item) => {
+                    sortedStock.map((item) => {
                       const status = getStockStatus(item.totalQty);
                       return (
                         <TableRow key={item.smart} className="hover:bg-muted/50">

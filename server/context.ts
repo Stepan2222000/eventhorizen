@@ -24,34 +24,6 @@ function getDbConnectMaxWaitMs(): number {
   return process.env.NODE_ENV === "development" ? 60_000 : 10_000;
 }
 
-function parseBooleanEnv(raw: string | undefined): boolean | undefined {
-  if (!raw) return undefined;
-  const normalized = raw.trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
-  return undefined;
-}
-
-function isInventoryRequiredOnStartup(): boolean {
-  const parsed = parseBooleanEnv(process.env.INVENTORY_DB_REQUIRED_ON_STARTUP);
-  if (parsed !== undefined) return parsed;
-  return process.env.NODE_ENV === "production";
-}
-
-function getInventoryBootstrapRetryMs(): number {
-  const raw = process.env.INVENTORY_DB_BOOTSTRAP_RETRY_MS;
-  if (raw && raw.trim()) {
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 1_000) return Math.trunc(n);
-  }
-  return 5_000;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 async function waitForDb(pool: Pool, label: string, maxWaitMs: number) {
   const startedAt = Date.now();
   let attempt = 0;
@@ -85,46 +57,17 @@ async function waitForDb(pool: Pool, label: string, maxWaitMs: number) {
   }
 }
 
-function startInventoryBootstrapLoop(pools: DbPools, maxWaitMs: number) {
-  const retryMs = getInventoryBootstrapRetryMs();
-
-  void (async () => {
-    while (true) {
-      try {
-        await waitForDb(pools.inventoryPool, "INVENTORY", maxWaitMs);
-        await ensureInventorySchema(pools.inventoryPool);
-        console.warn("INVENTORY DB became reachable. Schema is ensured.");
-        return;
-      } catch (err) {
-        console.warn(
-          `INVENTORY bootstrap retry failed (${errorMessage(err)}). Retrying in ${retryMs}ms...`
-        );
-        await sleep(retryMs);
-      }
-    }
-  })();
-}
-
 export async function initAppContext(): Promise<AppContext> {
   const pools = createDbPoolsFromEnv();
   const maxWaitMs = getDbConnectMaxWaitMs();
-  const inventoryRequired = isInventoryRequiredOnStartup();
 
   try {
-    await waitForDb(pools.partsPool, "PARTS", maxWaitMs);
+    await Promise.all([
+      waitForDb(pools.partsPool, "PARTS", maxWaitMs),
+      waitForDb(pools.inventoryPool, "INVENTORY", maxWaitMs),
+    ]);
 
-    try {
-      await waitForDb(pools.inventoryPool, "INVENTORY", maxWaitMs);
-      await ensureInventorySchema(pools.inventoryPool);
-    } catch (err) {
-      if (inventoryRequired) throw err;
-
-      console.warn(
-        `INVENTORY DB is unavailable on startup (${errorMessage(err)}). Starting in degraded mode; inventory-backed API routes may fail until DB is back.`
-      );
-      startInventoryBootstrapLoop(pools, maxWaitMs);
-    }
-
+    await ensureInventorySchema(pools.inventoryPool);
     const smartCache = await loadSmartCache(pools.partsPool);
     const storage = new DatabaseStorage(pools.inventoryPool, smartCache);
 

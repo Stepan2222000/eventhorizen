@@ -6,6 +6,14 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Movement } from "@shared/schema";
 
+function parseReturnedSaleId(note: string | null): number | null {
+  if (!note) return null;
+  const match = note.match(/^Возврат продажи #(\d+)$/);
+  if (!match) return null;
+  const id = Number.parseInt(match[1], 10);
+  return Number.isFinite(id) ? id : null;
+}
+
 export default function SoldItems() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -48,6 +56,9 @@ export default function SoldItems() {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/purchases`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
       toast({
         title: "Товар возвращен",
         description: "Товар возвращен на склад",
@@ -63,13 +74,17 @@ export default function SoldItems() {
     },
   });
 
-  // Filter movements by status
-  const awaitingShipment = movements.filter(m => 
-    m.reason === "sale" && (!m.saleStatus || m.saleStatus === "awaiting_shipment")
+  // Exclude sales that were already returned to inventory to prevent duplicate return attempts.
+  const returnedSaleIds = new Set(
+    movements
+      .filter((m) => m.reason === "return")
+      .map((m) => parseReturnedSaleId(m.note))
+      .filter((id): id is number => id !== null)
   );
-  const shipped = movements.filter(m => 
-    m.reason === "sale" && m.saleStatus === "shipped"
-  );
+
+  const activeSales = movements.filter((m) => m.reason === "sale" && !returnedSaleIds.has(m.id));
+  const awaitingShipment = activeSales.filter((m) => !m.saleStatus || m.saleStatus === "awaiting_shipment");
+  const shipped = activeSales.filter((m) => m.saleStatus === "shipped");
 
   const formatPrice = (price: string | null) => {
     if (!price) return "—";
