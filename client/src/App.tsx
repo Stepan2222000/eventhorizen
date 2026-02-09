@@ -15,6 +15,9 @@ import SoldItems from "@/pages/sold-items";
 import SoldOut from "@/pages/sold-out";
 import TopParts from "@/pages/top-parts";
 import BulkImport from "@/pages/bulk-import";
+import Customers from "@/pages/customers";
+import CustomerDetails from "@/pages/customer-details";
+import OrderDetails from "@/pages/order-details";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -27,7 +30,11 @@ function Router() {
       <Route path="/stock" component={StockLevels} />
       <Route path="/history" component={MovementHistory} />
       <Route path="/sold-out" component={SoldOut} />
+      <Route path="/orders" component={SoldItems} />
       <Route path="/sold" component={SoldItems} />
+      <Route path="/orders/:id" component={OrderDetails} />
+      <Route path="/customers" component={Customers} />
+      <Route path="/customers/:id" component={CustomerDetails} />
       <Route path="/top-parts" component={TopParts} />
       <Route path="/import" component={BulkImport} />
       <Route component={NotFound} />

@@ -1,314 +1,552 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { Movement } from "@shared/schema";
+import type { Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
 
-function parseReturnedSaleId(note: string | null): number | null {
-  if (!note) return null;
-  const match = note.match(/^Возврат продажи #(\d+)$/);
-  if (!match) return null;
-  const id = Number.parseInt(match[1], 10);
-  return Number.isFinite(id) ? id : null;
+type OrderItemDraft = {
+  smart: string;
+  qty: number;
+  salePrice: string;
+};
+
+type CreateOrderResponse = OrderDetails;
+
+const DELIVERY_PAYER_OPTIONS: Array<{ value: DeliveryPayer; label: string }> = [
+  { value: "buyer", label: "Покупатель" },
+  { value: "seller", label: "Продавец" },
+];
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(value);
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString("ru-RU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function SoldItems() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data: movements = [], isLoading } = useQuery<Movement[]>({
+  const [filter, setFilter] = useState("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>("");
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [newCustomerNote, setNewCustomerNote] = useState("");
+  const [orderNote, setOrderNote] = useState("");
+  const [items, setItems] = useState<OrderItemDraft[]>([{ smart: "", qty: 1, salePrice: "" }]);
+  const [shippingMethodId, setShippingMethodId] = useState<string>("");
+  const [trackNumber, setTrackNumber] = useState("");
+  const [deliveryPrice, setDeliveryPrice] = useState("0");
+  const [deliveryPayer, setDeliveryPayer] = useState<DeliveryPayer>("buyer");
+  const ordersQueryKey = "/api/orders?includeArchived=1";
+
+  const { data: orders = [], isLoading } = useQuery<OrderSummary[]>({
+    queryKey: [ordersQueryKey],
+  });
+
+  const { data: customers = [] } = useQuery<Customer[]>({
+    queryKey: ["/api/customers"],
+  });
+
+  const { data: shippingMethods = [] } = useQuery<ShippingMethod[]>({
+    queryKey: ["/api/shipping-methods"],
+  });
+
+  const { data: movements = [] } = useQuery<Movement[]>({
     queryKey: ["/api/movements"],
   });
 
-  const markAsShippedMutation = useMutation({
-    mutationFn: async (movementId: number) => {
-      const response = await apiRequest("PATCH", `/api/movements/${movementId}/ship`, {});
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
-      toast({
-        title: "Статус обновлен",
-        description: "Товар помечен как отправленный",
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: "Ошибка обновления статуса",
-        description: error instanceof Error ? error.message : "Произошла ошибка",
-        variant: "destructive",
-      });
-    },
-  });
+  const selectedMethod = shippingMethods.find((m) => String(m.id) === shippingMethodId);
+  const isPickup = Boolean(selectedMethod?.isPickup);
+  const deliveryPriceNumber = Number(deliveryPrice || 0);
+  const shouldShowPayer = !(isPickup && deliveryPriceNumber === 0);
 
-  const returnToInventoryMutation = useMutation({
-    mutationFn: async (movementId: number) => {
-      const response = await apiRequest("POST", `/api/movements/${movementId}/return`, {});
-      return response.json();
-    },
-    onSuccess: (data: Movement) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/purchases`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}/sales`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/stock/${data.smart}`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
-      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
-      toast({
-        title: "Товар возвращен",
-        description: "Товар возвращен на склад",
-      });
-    },
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : "Произошла ошибка";
-      toast({
-        title: "Ошибка возврата товара",
-        description: message,
-        variant: "destructive",
-      });
-    },
-  });
-
-  // Exclude sales that were already returned to inventory to prevent duplicate return attempts.
-  const returnedSaleIds = new Set(
-    movements
-      .filter((m) => m.reason === "return")
-      .map((m) => parseReturnedSaleId(m.note))
-      .filter((id): id is number => id !== null)
+  const legacySales = useMemo(
+    () => movements.filter((m) => m.reason === "sale" && !m.orderId),
+    [movements]
   );
 
-  const activeSales = movements.filter((m) => m.reason === "sale" && !returnedSaleIds.has(m.id));
-  const awaitingShipment = activeSales.filter((m) => !m.saleStatus || m.saleStatus === "awaiting_shipment");
-  const shipped = activeSales.filter((m) => m.saleStatus === "shipped");
+  const filteredOrders = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return orders;
+    return orders.filter((order) => {
+      return (
+        order.customerName.toLowerCase().includes(q) ||
+        (order.customerPhone || "").toLowerCase().includes(q) ||
+        String(order.id).includes(q)
+      );
+    });
+  }, [orders, filter]);
 
-  const formatPrice = (price: string | null) => {
-    if (!price) return "—";
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: 'RUB',
-    }).format(parseFloat(price));
+  const totals = useMemo(() => {
+    const itemsTotal = items.reduce((sum, item) => sum + Number(item.salePrice || 0) * Number(item.qty || 0), 0);
+    const deliveryForCustomer = shouldShowPayer && deliveryPayer === "buyer" ? Number(deliveryPrice || 0) : 0;
+    return {
+      qty: items.reduce((sum, item) => sum + Number(item.qty || 0), 0),
+      itemsTotal,
+      grandTotal: itemsTotal + deliveryForCustomer,
+    };
+  }, [deliveryPayer, deliveryPrice, items, shouldShowPayer]);
+
+  const invalidateAfterOrderChanges = () => {
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/orders"),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/customers"),
+    });
   };
 
-  const formatDate = (dateString: Date | string) => {
-    return new Date(dateString).toLocaleString('ru-RU', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
+  const createOrderMutation = useMutation({
+    mutationFn: async () => {
+      if (!shippingMethodId) throw new Error("Выберите способ доставки");
+      if (!selectedCustomerId) throw new Error("Выберите клиента");
+      if (items.length === 0) throw new Error("Добавьте хотя бы одну позицию");
+
+      const normalizedItems = items.map((item) => ({
+        smart: item.smart.trim(),
+        qty: Number(item.qty),
+        salePrice: String(item.salePrice).trim(),
+      }));
+
+      for (const item of normalizedItems) {
+        if (!item.smart) throw new Error("SMART код обязателен для каждой позиции");
+        if (!Number.isFinite(item.qty) || item.qty <= 0) throw new Error("Количество должно быть положительным");
+        if (!item.salePrice || !Number.isFinite(Number(item.salePrice))) throw new Error("Цена продажи должна быть числом");
+        if (Number(item.salePrice) < 0) throw new Error("Цена продажи не может быть отрицательной");
+      }
+
+      if (!Number.isFinite(deliveryPriceNumber)) throw new Error("Стоимость доставки должна быть числом");
+      if (deliveryPriceNumber < 0) throw new Error("Стоимость доставки не может быть отрицательной");
+
+      const shipment: Record<string, unknown> = {
+        shippingMethodId: Number(shippingMethodId),
+        trackNumber: isPickup ? null : trackNumber.trim() || null,
+        deliveryPrice: deliveryPrice.trim() || "0",
+        deliveryPayer: shouldShowPayer ? deliveryPayer : null,
+      };
+
+      const payload: Record<string, unknown> = {
+        note: orderNote.trim() || null,
+        items: normalizedItems,
+        shipment,
+      };
+
+      if (selectedCustomerId === "__new__") {
+        if (!newCustomerName.trim()) throw new Error("Введите имя нового клиента");
+        payload.customer = {
+          name: newCustomerName.trim(),
+          phone: newCustomerPhone.trim() || null,
+          note: newCustomerNote.trim() || null,
+        };
+      } else {
+        payload.customerId = Number(selectedCustomerId);
+      }
+
+      const response = await apiRequest("POST", "/api/orders", payload);
+      return (await response.json()) as CreateOrderResponse;
+    },
+    onSuccess: (order) => {
+      invalidateAfterOrderChanges();
+      toast({
+        title: "Заказ оформлен",
+        description: `Заказ #${order.id} успешно создан`,
+      });
+      setSelectedCustomerId("");
+      setNewCustomerName("");
+      setNewCustomerPhone("");
+      setNewCustomerNote("");
+      setOrderNote("");
+      setItems([{ smart: "", qty: 1, salePrice: "" }]);
+      setShippingMethodId("");
+      setTrackNumber("");
+      setDeliveryPrice("0");
+      setDeliveryPayer("buyer");
+    },
+    onError: (error) => {
+      toast({
+        title: "Ошибка создания заказа",
+        description: error instanceof Error ? error.message : "Не удалось создать заказ",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateItem = (index: number, patch: Partial<OrderItemDraft>) => {
+    setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  };
+
+  const addItem = () => {
+    setItems((prev) => [...prev, { smart: "", qty: 1, salePrice: "" }]);
+  };
+
+  const removeItem = (index: number) => {
+    setItems((prev) => {
+      if (prev.length === 1) return prev;
+      return prev.filter((_, i) => i !== index);
     });
   };
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="p-8">
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {/* Awaiting Shipment */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold text-foreground">Ожидает отправки</div>
-                  <CardDescription>
-                    Товары готовы к отправке покупателю
-                  </CardDescription>
-                </div>
-                <Badge variant="secondary" className="text-sm">
-                  {awaitingShipment.length}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                  <p>Загрузка...</p>
-                </div>
-              ) : awaitingShipment.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <i className="fas fa-box-open text-4xl mb-4"></i>
-                  <p>Нет товаров ожидающих отправки</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {awaitingShipment.map((movement) => (
-                    <div
-                      key={movement.id}
-                      className="border border-border rounded-lg p-4 bg-card hover:bg-accent/5 transition-colors"
-                      data-testid={`item-awaiting-${movement.id}`}
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <div className="font-mono font-semibold text-sm text-foreground mb-1">
-                            {movement.smart}
-                          </div>
-                          <div className="text-xs text-muted-foreground break-words">
-                            {(movement.articles || []).length ? (movement.articles || []).join(", ") : "—"}
-                          </div>
-                        </div>
-                        <Badge variant="outline" className="ml-2">
-                          <i className="fas fa-clock mr-1"></i>
-                          Ожидает
-                        </Badge>
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-                        <div>
-                          <span className="text-muted-foreground">Количество:</span>
-                          <span className="font-mono font-semibold ml-2">
-                            {Math.abs(movement.qtyDelta)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Цена продажи:</span>
-                          <span className="font-semibold ml-2">
-                            {formatPrice(movement.salePrice)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Доставка:</span>
-                          <span className="font-semibold ml-2">
-                            {formatPrice(movement.deliveryPrice)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Дата:</span>
-                          <span className="text-xs ml-2">
-                            {formatDate(movement.createdAt)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {movement.trackNumber && (
-                        <div className="text-xs text-muted-foreground mb-3">
-                          <i className="fas fa-truck mr-1"></i>
-                          Трек: {movement.trackNumber}
-                        </div>
-                      )}
-
-                      <Button
-                        size="sm"
-                        className="w-full"
-                        onClick={() => markAsShippedMutation.mutate(movement.id)}
-                        disabled={markAsShippedMutation.isPending}
-                        data-testid={`button-ship-${movement.id}`}
-                      >
-                        <i className="fas fa-shipping-fast mr-2"></i>
-                        Отправлено
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Shipped */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold text-foreground">Отправлено</div>
-                  <CardDescription>
-                    Товары отправленные покупателю
-                  </CardDescription>
-                </div>
-                <Badge variant="secondary" className="text-sm">
-                  {shipped.length}
-                </Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                  <p>Загрузка...</p>
-                </div>
-              ) : shipped.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <i className="fas fa-shipping-fast text-4xl mb-4"></i>
-                  <p>Нет отправленных товаров</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {shipped.map((movement) => (
-                    <div
-                      key={movement.id}
-                      className="border border-success/30 rounded-lg p-4 bg-success/5"
-                      data-testid={`item-shipped-${movement.id}`}
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <div className="font-mono font-semibold text-sm text-foreground mb-1">
-                            {movement.smart}
-                          </div>
-                          <div className="text-xs text-muted-foreground break-words">
-                            {(movement.articles || []).length ? (movement.articles || []).join(", ") : "—"}
-                          </div>
-                        </div>
-                        <Badge className="bg-success text-success-foreground ml-2">
-                          <i className="fas fa-check mr-1"></i>
-                          Отправлено
-                        </Badge>
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-                        <div>
-                          <span className="text-muted-foreground">Количество:</span>
-                          <span className="font-mono font-semibold ml-2">
-                            {Math.abs(movement.qtyDelta)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Цена продажи:</span>
-                          <span className="font-semibold ml-2">
-                            {formatPrice(movement.salePrice)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Доставка:</span>
-                          <span className="font-semibold ml-2">
-                            {formatPrice(movement.deliveryPrice)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground">Дата отправки:</span>
-                          <span className="text-xs ml-2">
-                            {formatDate(movement.createdAt)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {movement.trackNumber && (
-                        <div className="text-xs text-muted-foreground mb-3">
-                          <i className="fas fa-truck mr-1"></i>
-                          Трек: {movement.trackNumber}
-                        </div>
-                      )}
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full"
-                        onClick={() => returnToInventoryMutation.mutate(movement.id)}
-                        disabled={returnToInventoryMutation.isPending}
-                        data-testid={`button-return-${movement.id}`}
-                      >
-                        <i className="fas fa-undo mr-2"></i>
-                        Вернуть на склад
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+      <div className="p-8 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Заказы</h1>
+            <p className="text-sm text-muted-foreground mt-1">Продажи оформляются через заказы с клиентами и отправками</p>
+          </div>
+          <Link href="/customers">
+            <Button variant="outline" data-testid="button-open-customers">
+              <i className="fas fa-users mr-2"></i>
+              Клиенты
+            </Button>
+          </Link>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Оформить заказ</CardTitle>
+            <CardDescription>Один заказ может включать несколько товаров и одну отправку (в v1)</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm font-medium mb-2">Клиент</p>
+                <Select value={selectedCustomerId} onValueChange={setSelectedCustomerId}>
+                  <SelectTrigger data-testid="select-order-customer">
+                    <SelectValue placeholder="Выберите клиента" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__new__">+ Новый клиент</SelectItem>
+                    {customers
+                      .filter((c) => !c.archivedAt)
+                      .map((customer) => (
+                        <SelectItem key={customer.id} value={String(customer.id)}>
+                          {customer.name} {customer.phone ? `(${customer.phone})` : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <p className="text-sm font-medium mb-2">Заметка по заказу</p>
+                <Input
+                  value={orderNote}
+                  onChange={(e) => setOrderNote(e.target.value)}
+                  placeholder="Например: оплата при получении"
+                  data-testid="input-order-note"
+                />
+              </div>
+            </div>
+
+            {selectedCustomerId === "__new__" && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-md border p-4">
+                <div>
+                  <p className="text-sm font-medium mb-2">Имя *</p>
+                  <Input
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="Имя клиента"
+                    data-testid="input-new-customer-name"
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-2">Телефон</p>
+                  <Input
+                    value={newCustomerPhone}
+                    onChange={(e) => setNewCustomerPhone(e.target.value)}
+                    placeholder="+7..."
+                    data-testid="input-new-customer-phone"
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-medium mb-2">Заметка</p>
+                  <Input
+                    value={newCustomerNote}
+                    onChange={(e) => setNewCustomerNote(e.target.value)}
+                    placeholder="Опционально"
+                    data-testid="input-new-customer-note"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Позиции заказа</p>
+                <Button type="button" size="sm" variant="outline" onClick={addItem} data-testid="button-add-order-item">
+                  <i className="fas fa-plus mr-2"></i>
+                  Добавить товар
+                </Button>
+              </div>
+              {items.map((item, index) => (
+                <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_120px_160px_56px] gap-3 items-end rounded-md border p-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">SMART код</p>
+                    <Input
+                      value={item.smart}
+                      onChange={(e) => updateItem(index, { smart: e.target.value })}
+                      placeholder="SMART..."
+                      className="font-mono"
+                      data-testid={`input-order-item-smart-${index}`}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Кол-во</p>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={item.qty}
+                      onChange={(e) => updateItem(index, { qty: Number(e.target.value) || 1 })}
+                      data-testid={`input-order-item-qty-${index}`}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Цена за ед.</p>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      value={item.salePrice}
+                      onChange={(e) => updateItem(index, { salePrice: e.target.value })}
+                      data-testid={`input-order-item-price-${index}`}
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={items.length === 1}
+                    onClick={() => removeItem(index)}
+                    data-testid={`button-remove-order-item-${index}`}
+                  >
+                    <i className="fas fa-trash-can"></i>
+                  </Button>
+                </div>
+              ))}
+              <div className="text-sm text-muted-foreground">
+                Итого по товарам: <span className="font-semibold text-foreground">{totals.qty} шт</span> на{" "}
+                <span className="font-semibold text-foreground">{formatCurrency(totals.itemsTotal)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-md border p-4">
+              <p className="text-sm font-medium">Отправка</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Способ доставки</p>
+                  <Select
+                    value={shippingMethodId}
+                    onValueChange={(value) => {
+                      setShippingMethodId(value);
+                      const method = shippingMethods.find((m) => String(m.id) === value);
+                      if (method?.isPickup) {
+                        setDeliveryPrice("0");
+                        setTrackNumber("");
+                      }
+                    }}
+                  >
+                    <SelectTrigger data-testid="select-order-shipping-method">
+                      <SelectValue placeholder="Выберите способ доставки" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {shippingMethods.map((method) => (
+                        <SelectItem key={method.id} value={String(method.id)}>
+                          {method.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Стоимость доставки (за отправку)</p>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={deliveryPrice}
+                    onChange={(e) => setDeliveryPrice(e.target.value)}
+                    data-testid="input-order-delivery-price"
+                  />
+                </div>
+
+                {!isPickup && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Трек-номер</p>
+                    <Input
+                      value={trackNumber}
+                      onChange={(e) => setTrackNumber(e.target.value)}
+                      placeholder="RA123..."
+                      data-testid="input-order-track-number"
+                    />
+                  </div>
+                )}
+
+                {shouldShowPayer && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Кто платит</p>
+                    <Select value={deliveryPayer} onValueChange={(value) => setDeliveryPayer(value as DeliveryPayer)}>
+                      <SelectTrigger data-testid="select-order-delivery-payer">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DELIVERY_PAYER_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+              <div className="text-sm">
+                Итого к оплате клиентом: <span className="font-semibold">{formatCurrency(totals.grandTotal)}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                onClick={() => createOrderMutation.mutate()}
+                disabled={createOrderMutation.isPending}
+                data-testid="button-create-order"
+              >
+                {createOrderMutation.isPending ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin mr-2"></i>
+                    Оформление...
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-check mr-2"></i>
+                    Оформить заказ
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <CardTitle>Список заказов</CardTitle>
+                <CardDescription>Новые продажи сгруппированы по клиентам и отправкам</CardDescription>
+              </div>
+              <Input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Поиск по клиенту или номеру заказа"
+                className="max-w-sm"
+                data-testid="input-orders-filter"
+              />
+            </div>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <p className="text-sm text-muted-foreground">Загрузка...</p>
+            ) : filteredOrders.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Заказы пока отсутствуют</p>
+            ) : (
+              <div className="space-y-3">
+                {filteredOrders.map((order) => (
+                  <div key={order.id} className="rounded-md border p-4" data-testid={`card-order-${order.id}`}>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          Заказ #{order.id} · {order.customerName}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">{formatDate(order.createdAt)}</p>
+                      </div>
+                      <Link href={`/orders/${order.id}`}>
+                        <Button size="sm" variant="outline" data-testid={`button-open-order-${order.id}`}>
+                          Подробнее
+                        </Button>
+                      </Link>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Позиции</p>
+                        <p>{order.positionsCount}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Количество</p>
+                        <p>{order.totalQty} шт</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Сумма товаров</p>
+                        <p>{formatCurrency(order.itemsTotal)}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {order.shipmentsPending > 0 && <Badge variant="secondary">Ожидает: {order.shipmentsPending}</Badge>}
+                        {order.shipmentsShipped > 0 && <Badge variant="outline">Отправлено: {order.shipmentsShipped}</Badge>}
+                        {order.shipmentsDelivered > 0 && <Badge>Получено: {order.shipmentsDelivered}</Badge>}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Старые продажи без заказа</CardTitle>
+            <CardDescription>Исторические записи из плоских движений (legacy)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {legacySales.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Старых продаж без заказа не найдено</p>
+            ) : (
+              <div className="space-y-2">
+                {legacySales.slice(0, 20).map((sale) => (
+                  <div key={sale.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                    <div>
+                      <span className="font-mono">{sale.smart}</span>
+                      <span className="text-muted-foreground ml-2">{formatDate(sale.createdAt)}</span>
+                    </div>
+                    <div className="font-mono">
+                      {Math.abs(sale.qtyDelta)} шт · {sale.salePrice ? `${sale.salePrice} ₽` : "—"}
+                    </div>
+                  </div>
+                ))}
+                {legacySales.length > 20 && (
+                  <p className="text-xs text-muted-foreground">Показаны первые 20 из {legacySales.length}</p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

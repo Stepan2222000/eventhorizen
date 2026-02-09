@@ -76,9 +76,9 @@
 **Режим:** чтение и запись
 **Схема:** `inventory`
 
-### 3.1. Таблица `inventory.reasons`
+### 3.1. Типы операций (REASONS)
 
-Справочник типов операций. **Фиксированный набор**, перезаписывается при каждом старте.
+Фиксированный набор, хранится **в коде** как константа `REASONS` в `shared/schema.ts` (не в БД — таблица `inventory.reasons` удалена как overengineering).
 
 | code       | title          |
 |------------|----------------|
@@ -88,7 +88,7 @@
 | `writeoff` | Списание       |
 | `adjust`   | Корректировка  |
 
-Любые "лишние" коды удаляются при старте. Таблица movements **не имеет FK** на reasons — это просто справочник для UI.
+При старте сервера старая таблица `inventory.reasons` удаляется (`DROP TABLE IF EXISTS`).
 
 ### 3.2. Таблица `inventory.shipping_methods`
 
@@ -106,7 +106,7 @@
 - СДЭК
 - Авито доставка
 
-Пользователь может добавлять и удалять способы доставки через API.
+Пользователь может добавлять и удалять способы доставки через UI на странице "Проданные товары" (кнопка "Способы доставки" с шестерёнкой). Удаление защищено: если метод используется в существующих операциях — сервер возвращает ошибку.
 
 ### 3.3. Таблица `inventory.movements` (ЯДРО СИСТЕМЫ)
 
@@ -312,7 +312,7 @@ sale_status          null      авто*     null    null      null
 
 Порядок:
 1. `CREATE SCHEMA IF NOT EXISTS inventory`
-2. `CREATE TABLE IF NOT EXISTS inventory.reasons` → UPSERT 5 записей → удаление лишних
+2. `DROP TABLE IF EXISTS inventory.reasons` (таблица убрана, типы операций теперь в коде)
 3. `CREATE TABLE IF NOT EXISTS inventory.shipping_methods` → вставка 4 дефолтных (если пусто)
 4. `CREATE TABLE IF NOT EXISTS inventory.movements` (базовые колонки)
 5. `DROP COLUMN IF EXISTS article` (по спецификации — артикул не хранится)

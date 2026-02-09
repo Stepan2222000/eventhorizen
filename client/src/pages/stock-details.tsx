@@ -43,7 +43,21 @@ export default function StockDetails() {
 
   // Fetch sales analytics
   const { data: salesData, isLoading: salesLoading } = useQuery<{
-    sales: (Movement & { profit: number; profitMarginPercent: number; daysFromPurchase: number | null; purchasePriceUsed: number })[];
+    sales: Array<{
+      id: string;
+      source: "legacy" | "order";
+      createdAt: string;
+      qty: number;
+      salePrice: number;
+      deliveryPrice: number;
+      deliveryPayer: "seller" | "buyer" | "mixed" | null;
+      customerName: string | null;
+      orderId: number | null;
+      profit: number;
+      profitMarginPercent: number;
+      daysFromPurchase: number | null;
+      purchasePriceUsed: number;
+    }>;
     metrics: {
       averageDaysToSell: number;
       soldQuantity: number;
@@ -485,8 +499,14 @@ export default function StockDetails() {
                   <Card className="bg-muted/50 border-border">
                     <CardContent className="p-4">
                       <p className="text-xs text-muted-foreground mb-1">Средняя доходность</p>
-                      <p className="text-2xl font-bold text-green-600" data-testid="metric-avg-profit">
-                        +{salesData.metrics.averageProfitPerUnit.toFixed(2)} ₽/шт
+                      <p
+                        className={`text-2xl font-bold ${
+                          salesData.metrics.averageProfitPerUnit >= 0 ? "text-green-600" : "text-red-600"
+                        }`}
+                        data-testid="metric-avg-profit"
+                      >
+                        {salesData.metrics.averageProfitPerUnit >= 0 ? "+" : ""}
+                        {salesData.metrics.averageProfitPerUnit.toFixed(2)} ₽/шт
                       </p>
                     </CardContent>
                   </Card>
@@ -494,8 +514,14 @@ export default function StockDetails() {
                   <Card className="bg-muted/50 border-border">
                     <CardContent className="p-4">
                       <p className="text-xs text-muted-foreground mb-1">Процент доходности</p>
-                      <p className="text-2xl font-bold text-green-600" data-testid="metric-avg-margin">
-                        +{salesData.metrics.averageProfitMarginPercent.toFixed(1)}%
+                      <p
+                        className={`text-2xl font-bold ${
+                          salesData.metrics.averageProfitMarginPercent >= 0 ? "text-green-600" : "text-red-600"
+                        }`}
+                        data-testid="metric-avg-margin"
+                      >
+                        {salesData.metrics.averageProfitMarginPercent >= 0 ? "+" : ""}
+                        {salesData.metrics.averageProfitMarginPercent.toFixed(1)}%
                       </p>
                     </CardContent>
                   </Card>
@@ -507,6 +533,7 @@ export default function StockDetails() {
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
                         <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Дата</th>
+                        <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Клиент</th>
                         <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Кол-во</th>
                         <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Цена продажи</th>
                         <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Цена закупа</th>
@@ -522,17 +549,38 @@ export default function StockDetails() {
                           <td className="p-4 align-middle whitespace-nowrap">
                             {format(new Date(sale.createdAt), "dd.MM.yyyy")}
                           </td>
+                          <td className="p-4 align-middle">
+                            <div className="flex items-center gap-2">
+                              <span>{sale.customerName || "legacy"}</span>
+                              {sale.orderId && (
+                                <Link href={`/orders/${sale.orderId}`}>
+                                  <Button variant="ghost" size="sm" className="h-6 px-2 text-xs">
+                                    #{sale.orderId}
+                                  </Button>
+                                </Link>
+                              )}
+                            </div>
+                          </td>
                           <td className="p-4 align-middle text-center font-mono">
-                            {Math.abs(sale.qtyDelta)}
+                            {sale.qty}
                           </td>
                           <td className="p-4 align-middle text-right font-mono">
-                            {sale.salePrice ? `${parseFloat(sale.salePrice).toFixed(2)} ₽` : "—"}
+                            {sale.salePrice.toFixed(2)} ₽
                           </td>
                           <td className="p-4 align-middle text-right font-mono">
                             {sale.purchasePriceUsed > 0 ? `${sale.purchasePriceUsed.toFixed(2)} ₽` : "—"}
                           </td>
                           <td className="p-4 align-middle text-right font-mono">
-                            {sale.deliveryPrice ? `${parseFloat(sale.deliveryPrice).toFixed(2)} ₽` : "—"}
+                            {sale.deliveryPrice > 0 ? `${sale.deliveryPrice.toFixed(2)} ₽` : "—"}
+                            <div className="text-[10px] text-muted-foreground mt-1">
+                              {sale.deliveryPayer === "seller"
+                                ? "платит продавец"
+                                : sale.deliveryPayer === "buyer"
+                                  ? "платит покупатель"
+                                  : sale.deliveryPayer === "mixed"
+                                    ? "смешанная оплата"
+                                    : "—"}
+                            </div>
                           </td>
                           <td className="p-4 align-middle text-right font-mono font-bold">
                             <span className={sale.profit >= 0 ? "text-green-600" : "text-red-600"}>

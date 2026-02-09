@@ -4,7 +4,16 @@ import multer from "multer";
 import * as XLSX from "xlsx";
 import { z } from "zod";
 import { normalizeArticle } from "@shared/normalization";
-import { insertMovementSchema, saleStatusSchema, type BulkImportRow } from "@shared/schema";
+import {
+  createCustomerSchema,
+  createOrderReturnSchema,
+  createOrderSchema,
+  insertMovementSchema,
+  saleStatusSchema,
+  updateCustomerSchema,
+  updateShipmentStatusSchema,
+  type BulkImportRow,
+} from "@shared/schema";
 import type { AppContext } from "./context";
 import { InsufficientStockError, InvalidRequestError } from "./storage";
 
@@ -197,6 +206,174 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
     res.json(smart);
   });
 
+  app.get("/api/customers", async (req, res) => {
+    try {
+      const query = typeof req.query.query === "string" ? req.query.query : undefined;
+      const includeArchived = req.query.includeArchived === "1" || req.query.includeArchived === "true";
+      const customers = await storage.getCustomers(query, includeArchived);
+      res.json(customers);
+    } catch (err) {
+      console.error("Get customers error:", err);
+      res.status(500).json({ error: "Failed to get customers" });
+    }
+  });
+
+  app.get("/api/customers/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+
+      const customer = await storage.getCustomerById(id);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      const orders = await storage.getOrders({ customerId: id, includeArchivedCustomers: true });
+      const stats = {
+        ordersCount: orders.length,
+        totalAmount: Number(orders.reduce((sum, o) => sum + o.itemsTotal, 0).toFixed(2)),
+        returnsCount: orders.reduce((sum, o) => sum + o.returnsCount, 0),
+      };
+      res.json({ customer, orders, stats });
+    } catch (err) {
+      console.error("Get customer error:", err);
+      res.status(500).json({ error: "Failed to get customer" });
+    }
+  });
+
+  app.post("/api/customers", async (req, res) => {
+    try {
+      const validated = createCustomerSchema.parse(req.body);
+      const customer = await storage.createCustomer(validated);
+      res.status(201).json(customer);
+    } catch (err) {
+      console.error("Create customer error:", err);
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to create customer" });
+    }
+  });
+
+  app.patch("/api/customers/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+      const validated = updateCustomerSchema.parse(req.body);
+      const customer = await storage.updateCustomer(id, validated);
+      res.json(customer);
+    } catch (err) {
+      console.error("Update customer error:", err);
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err instanceof Error && err.message === "Customer not found") {
+        return res.status(404).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to update customer" });
+    }
+  });
+
+  app.post("/api/orders", async (req, res) => {
+    try {
+      const validated = createOrderSchema.parse(req.body);
+      const order = await storage.createOrder(validated);
+      res.status(201).json(order);
+    } catch (err) {
+      console.error("Create order error:", err);
+      if (err instanceof InsufficientStockError) {
+        return res.status(409).json({
+          error: err.message,
+          details: { smart: err.smart, currentStock: err.currentStock, requestedQty: err.requestedQty },
+        });
+      }
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to create order" });
+    }
+  });
+
+  app.get("/api/orders", async (req, res) => {
+    try {
+      const customerIdRaw = req.query.customerId;
+      const customerId =
+        typeof customerIdRaw === "string" && customerIdRaw.trim()
+          ? Number.parseInt(customerIdRaw, 10)
+          : undefined;
+      if (customerIdRaw && !Number.isFinite(customerId)) {
+        return res.status(400).json({ error: "Invalid customerId" });
+      }
+      const includeArchived = req.query.includeArchived === "1" || req.query.includeArchived === "true";
+      const orders = await storage.getOrders({
+        customerId,
+        includeArchivedCustomers: includeArchived,
+      });
+      res.json(orders);
+    } catch (err) {
+      console.error("Get orders error:", err);
+      res.status(500).json({ error: "Failed to get orders" });
+    }
+  });
+
+  app.get("/api/orders/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+      const order = await storage.getOrderById(id);
+      if (!order) return res.status(404).json({ error: "Order not found" });
+      res.json(order);
+    } catch (err) {
+      console.error("Get order details error:", err);
+      res.status(500).json({ error: "Failed to get order details" });
+    }
+  });
+
+  app.patch("/api/shipments/:id/status", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+      const validated = updateShipmentStatusSchema.parse(req.body);
+      const shipment = await storage.updateShipmentStatus(id, validated.status);
+      res.json(shipment);
+    } catch (err) {
+      console.error("Update shipment status error:", err);
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
+      }
+      if (err instanceof Error && err.message === "Shipment not found") {
+        return res.status(404).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to update shipment status" });
+    }
+  });
+
+  app.post("/api/orders/:id/returns", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid ID" });
+      const validated = createOrderReturnSchema.parse(req.body);
+      const created = await storage.createOrderReturn(id, validated);
+      res.status(201).json(created);
+    } catch (err) {
+      console.error("Create order return error:", err);
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: err.issues.map((i) => i.message).join("; ") });
+      }
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to create order return" });
+    }
+  });
+
   app.post("/api/movements", async (req, res) => {
     try {
       const validated = insertMovementSchema.parse(req.body);
@@ -264,81 +441,8 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
 
   app.get("/api/stock/:smart/sales", async (req, res) => {
     try {
-      const smart = req.params.smart;
-      const [sales, purchases] = await Promise.all([
-        storage.getSalesBySmart(smart),
-        storage.getPurchasesBySmart(smart),
-      ]);
-
-      // Average purchase price must be computed across ALL purchases for SMART.
-      // Use weighted average by quantity (price-per-unit).
-      const purchaseLines = purchases
-        .map((p) => ({
-          price: p.purchasePrice ? Number(p.purchasePrice) : NaN,
-          qty: Math.abs(p.qtyDelta),
-        }))
-        .filter((l) => Number.isFinite(l.price) && l.qty > 0);
-
-      const totalPurchaseQty = purchaseLines.reduce((sum, l) => sum + l.qty, 0);
-      const totalPurchaseCostWeighted = purchaseLines.reduce((sum, l) => sum + l.price * l.qty, 0);
-      const avgPurchasePrice = totalPurchaseQty > 0 ? totalPurchaseCostWeighted / totalPurchaseQty : 0;
-
-      const salesWithMetrics = sales.map((sale) => {
-        const salePrice = sale.salePrice ? Number(sale.salePrice) : 0;
-        const deliveryPrice = sale.deliveryPrice ? Number(sale.deliveryPrice) : 0;
-        const quantity = Math.abs(sale.qtyDelta);
-
-        const profitPerUnit = salePrice - avgPurchasePrice - deliveryPrice;
-        const profit = profitPerUnit * quantity;
-        const profitMarginPercent = avgPurchasePrice > 0 ? (profitPerUnit / avgPurchasePrice) * 100 : 0;
-
-        // Optional UX metric: closest previous purchase (by SMART only).
-        const closestPurchase = purchases
-          .filter((p) => new Date(p.createdAt) < new Date(sale.createdAt))
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
-
-        const daysFromPurchase = closestPurchase
-          ? Math.round(
-              (new Date(sale.createdAt).getTime() - new Date(closestPurchase.createdAt).getTime()) / (1000 * 60 * 60 * 24)
-            )
-          : null;
-
-        return {
-          ...sale,
-          profit,
-          profitMarginPercent,
-          daysFromPurchase,
-          purchasePriceUsed: avgPurchasePrice,
-        };
-      });
-
-      const totalSold = salesWithMetrics.reduce((sum, s) => sum + Math.abs(s.qtyDelta), 0);
-      const totalPurchased = purchases.reduce((sum, p) => sum + Math.abs(p.qtyDelta), 0);
-      const sellThroughRate = totalPurchased > 0 ? (totalSold / totalPurchased) * 100 : 0;
-
-      const salesWithDays = salesWithMetrics.filter((s) => s.daysFromPurchase !== null);
-      const averageDaysToSell =
-        salesWithDays.length > 0
-          ? salesWithDays.reduce((sum, s) => sum + (s.daysFromPurchase || 0), 0) / salesWithDays.length
-          : 0;
-
-      const totalProfit = salesWithMetrics.reduce((sum, s) => sum + s.profit, 0);
-      const averageProfitPerUnit = totalSold > 0 ? totalProfit / totalSold : 0;
-
-      const totalPurchaseCost = avgPurchasePrice * totalSold;
-      const averageProfitMarginPercent = totalPurchaseCost > 0 ? (totalProfit / totalPurchaseCost) * 100 : 0;
-
-      res.json({
-        sales: salesWithMetrics,
-        metrics: {
-          averageDaysToSell: Math.round(averageDaysToSell * 10) / 10,
-          soldQuantity: totalSold,
-          totalPurchased,
-          sellThroughRate: Math.round(sellThroughRate * 10) / 10,
-          averageProfitPerUnit: Math.round(averageProfitPerUnit * 100) / 100,
-          averageProfitMarginPercent: Math.round(averageProfitMarginPercent * 10) / 10,
-        },
-      });
+      const data = await storage.getSalesAnalyticsBySmart(req.params.smart);
+      res.json(data);
     } catch (err) {
       console.error("Get sales analytics error:", err);
       res.status(500).json({ error: "Failed to get sales analytics" });
@@ -428,12 +532,16 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
     try {
       const name = req.body?.name;
       if (!name || typeof name !== "string") return res.status(400).json({ error: "Name is required" });
-      const method = await storage.createShippingMethod({ name });
+      const isPickup = Boolean(req.body?.isPickup);
+      const method = await storage.createShippingMethod({ name, isPickup });
       res.status(201).json(method);
     } catch (err) {
       console.error("Create shipping method error:", err);
       if (err instanceof InvalidRequestError) {
         return res.status(400).json({ error: err.message });
+      }
+      if ((err as any)?.code === "23505") {
+        return res.status(400).json({ error: "Такой способ доставки уже существует" });
       }
       res.status(500).json({ error: "Failed to create shipping method" });
     }
@@ -447,6 +555,9 @@ export async function registerRoutes(app: Express, ctx: AppContext): Promise<Ser
       res.status(204).send();
     } catch (err) {
       console.error("Delete shipping method error:", err);
+      if (err instanceof InvalidRequestError) {
+        return res.status(400).json({ error: err.message });
+      }
       res.status(500).json({ error: "Failed to delete shipping method" });
     }
   });

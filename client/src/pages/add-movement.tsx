@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -208,7 +208,7 @@ export default function AddMovement() {
     queryKey: ["/api/shipping-methods"],
   });
 
-  const availableReasons = (reasons || []).filter((r) => r.code !== "return");
+  const availableReasons = (reasons || []).filter((r) => r.code !== "return" && r.code !== "sale");
   const selectedReason = form.watch("reason");
 
   // Clear hidden fields when reason changes (and also clear stale saleStatus).
@@ -332,6 +332,23 @@ export default function AddMovement() {
               </CardTitle>
             </CardHeader>
             <CardContent>
+              <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Продажи оформляются через заказы</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Покупки, списания и корректировки остаются здесь. Для продажи перейдите на страницу заказов.
+                    </p>
+                  </div>
+                  <Link href="/orders">
+                    <Button variant="outline" size="sm" data-testid="button-go-orders">
+                      <i className="fas fa-cart-shopping mr-2"></i>
+                      Открыть заказы
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
                   {/* SMART search */}
@@ -532,7 +549,7 @@ export default function AddMovement() {
                           render={({ field }) => (
                             <FormItem>
                               <FormLabel>
-                                Цена закупки <span className="text-destructive">*</span>
+                                Цена закупки за ед. <span className="text-destructive">*</span>
                               </FormLabel>
                               <FormControl>
                                 <Input
@@ -545,6 +562,12 @@ export default function AddMovement() {
                                 />
                               </FormControl>
                               <FormMessage />
+                              {field.value && Number(field.value) > 0 && Math.abs(form.watch("qtyDelta")) > 0 && (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  <i className="fas fa-calculator mr-1"></i>
+                                  Итого: {(Number(field.value) * Math.abs(form.watch("qtyDelta"))).toFixed(2)} ₽
+                                </p>
+                              )}
                             </FormItem>
                           )}
                         />
