@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, Response
 from openpyxl import Workbook, load_workbook
 
 from py_backend.normalization import normalize_article
-from py_backend.storage import DatabaseStorage, InsufficientStockError, InvalidRequestError
+from py_backend.storage import DatabaseStorage, InsufficientBoxStockError, InsufficientStockError, InvalidRequestError
 from py_backend.types import SaleStatus
 
 MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
@@ -282,6 +282,19 @@ def register_routes(app: FastAPI) -> None:
             body = await request.json()
             order = await storage.createOrder(body)
             return JSONResponse(status_code=201, content=order)
+        except InsufficientBoxStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {
+                        "smart": err.smart,
+                        "boxName": err.boxName,
+                        "available": err.available,
+                        "requested": err.requested,
+                    },
+                },
+            )
         except InsufficientStockError as err:
             return JSONResponse(
                 status_code=409,
@@ -386,6 +399,19 @@ def register_routes(app: FastAPI) -> None:
                 )
             movement = await storage.createMovement(body)
             return JSONResponse(status_code=201, content=movement)
+        except InsufficientBoxStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {
+                        "smart": err.smart,
+                        "boxName": err.boxName,
+                        "available": err.available,
+                        "requested": err.requested,
+                    },
+                },
+            )
         except InsufficientStockError as err:
             return JSONResponse(
                 status_code=409,
@@ -402,8 +428,9 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/api/movements")
     async def get_movements(request: Request) -> Response:
         storage = _storage_from_request(request)
+        box_number = request.query_params.get("boxNumber")
         try:
-            movements = await storage.getMovements()
+            movements = await storage.getMovements({"boxNumber": box_number} if box_number else None)
             return JSONResponse(content=movements)
         except Exception:
             return JSONResponse(status_code=500, content={"error": "Failed to get movements"})
@@ -442,8 +469,9 @@ def register_routes(app: FastAPI) -> None:
             info = await storage.getStockBySmart(smart)
             if not info.get("existed"):
                 return JSONResponse(status_code=404, content={"error": "SMART code not found in inventory history"})
-            payload = {k: v for k, v in info.items() if k != "existed"}
-            return JSONResponse(content=payload)
+            # The frontend expects `existed` in the payload (shared/schema.ts).
+            # Keeping it also makes the API response self-descriptive.
+            return JSONResponse(content=info)
         except Exception:
             return JSONResponse(status_code=500, content={"error": "Failed to get stock details"})
 
@@ -489,6 +517,105 @@ def register_routes(app: FastAPI) -> None:
             if str(err) == "Movement not found":
                 return JSONResponse(status_code=404, content={"error": str(err)})
             return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to update movement"})
+
+    # Boxes (storage locations)
+    @app.get("/api/boxes")
+    async def get_boxes(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            active_only = request.query_params.get("activeOnly") in {"1", "true"}
+            data = await storage.getBoxes(activeOnly=active_only)
+            return JSONResponse(content=data)
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to get boxes"})
+
+    @app.get("/api/unboxed")
+    async def get_unboxed(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            items = await storage.getUnboxedItems()
+            return JSONResponse(content=items)
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "Failed to get unboxed items"})
+
+    @app.post("/api/boxes")
+    async def create_box(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            body = await request.json()
+            created = await storage.createBox(body)
+            return JSONResponse(status_code=201, content=created)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to create box"})
+
+    @app.post("/api/boxes/transfer")
+    async def transfer_between_boxes(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            body = await request.json()
+            created = await storage.transferBetweenBoxes(body)
+            return JSONResponse(status_code=201, content=created)
+        except InsufficientBoxStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {
+                        "smart": err.smart,
+                        "boxName": err.boxName,
+                        "available": err.available,
+                        "requested": err.requested,
+                    },
+                },
+            )
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to transfer"})
+
+    @app.get("/api/boxes/{box_name}")
+    async def get_box_details(request: Request, box_name: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            limit_raw = request.query_params.get("historyLimit")
+            limit = 50
+            if limit_raw and limit_raw.strip():
+                try:
+                    limit = int(limit_raw)
+                except Exception:
+                    limit = 50
+            details = await storage.getBoxDetails(box_name, historyLimit=limit)
+            return JSONResponse(content=details)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=404, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to get box details"})
+
+    @app.patch("/api/boxes/{box_name}")
+    async def update_box(request: Request, box_name: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            body = await request.json()
+            updated = await storage.updateBox(box_name, body)
+            return JSONResponse(content=updated)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to update box"})
+
+    # Boxes containing a specific SMART (used for sales/writeoffs)
+    @app.get("/api/stock/{smart}/boxes")
+    async def get_smart_boxes(request: Request, smart: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            data = await storage.getBoxesForSmart(smart)
+            return JSONResponse(content=data)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to get smart boxes"})
 
     @app.get("/api/reasons")
     async def get_reasons(request: Request) -> Response:
@@ -609,6 +736,11 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
+            body = await request.json()
+            box_number = body.get("boxNumber")
+            if not box_number:
+                return JSONResponse(status_code=400, content={"error": "Номер коробки обязателен"})
+
             sale_movement = await storage.getMovementById(mid)
             if not sale_movement:
                 return JSONResponse(status_code=404, content={"error": "Movement not found"})
@@ -624,13 +756,26 @@ def register_routes(app: FastAPI) -> None:
                     "purchasePrice": None,
                     "salePrice": None,
                     "deliveryPrice": None,
-                    "boxNumber": None,
+                    "boxNumber": box_number,
                     "trackNumber": None,
                     "shippingMethodId": None,
                     "saleStatus": None,
                 }
             )
             return JSONResponse(status_code=201, content=return_movement)
+        except InsufficientBoxStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {
+                        "smart": err.smart,
+                        "boxName": err.boxName,
+                        "available": err.available,
+                        "requested": err.requested,
+                    },
+                },
+            )
         except Exception as err:
             if str(err) == "Товар уже возвращен на склад":
                 return JSONResponse(status_code=409, content={"error": str(err)})
@@ -736,18 +881,69 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=500, content={"error": "Failed to process bulk import"})
 
     @app.get("/api/import-template")
-    async def import_template() -> Response:
+    async def import_template(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        shipping_method_id = 1
+        try:
+            methods = await storage.getShippingMethods()
+            if methods and methods[0].get("id"):
+                shipping_method_id = int(methods[0]["id"])
+        except Exception:
+            shipping_method_id = 1
+
+        headers = [
+            "smart",
+            "qty_delta",
+            "reason",
+            "purchase_price",
+            "sale_price",
+            "delivery_price",
+            "shipping_method_id",
+            "box_number",
+            "track_number",
+            "note",
+        ]
+
+        # Keep examples importable with the current validation rules (box_number is required for all new operations).
         template_data = [
-            {"smart": "smart_17713", "qty_delta": 10, "reason": "purchase", "purchase_price": 100.0, "box_number": "K-123", "note": "Example purchase"},
-            {"smart": "smart_17713", "qty_delta": -1, "reason": "sale", "sale_price": 250.0, "delivery_price": 0.0, "shipping_method_id": 1, "note": "Example sale"},
-            {"smart": "smart_17713", "qty_delta": -1, "reason": "writeoff", "note": "Example writeoff"},
-            {"smart": "smart_17713", "qty_delta": 2, "reason": "adjust", "purchase_price": 120.0, "note": "Пересчет склада, нашли лишние"},
+            {
+                "smart": "smart_17713",
+                "qty_delta": 10,
+                "reason": "purchase",
+                "purchase_price": 100.0,
+                "box_number": "K-123",
+                "note": "Example purchase",
+            },
+            {
+                "smart": "smart_17713",
+                "qty_delta": -1,
+                "reason": "sale",
+                "sale_price": 250.0,
+                "delivery_price": 0.0,
+                "shipping_method_id": shipping_method_id,
+                "box_number": "K-123",
+                "note": "Example sale (set shipping_method_id to an existing method)",
+            },
+            {
+                "smart": "smart_17713",
+                "qty_delta": -1,
+                "reason": "writeoff",
+                "box_number": "K-123",
+                "note": "Example writeoff",
+            },
+            {
+                "smart": "smart_17713",
+                "qty_delta": 2,
+                "reason": "adjust",
+                "purchase_price": 120.0,
+                "box_number": "K-123",
+                "note": "Пересчет склада, нашли лишние",
+            },
         ]
 
         wb = Workbook()
         ws = wb.active
         ws.title = "Import Template"
-        headers = list(template_data[0].keys())
         ws.append(headers)
         for row in template_data:
             ws.append([row.get(h) for h in headers])

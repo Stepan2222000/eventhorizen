@@ -11,6 +11,9 @@ import Dashboard from "@/pages/dashboard";
 import AddMovement from "@/pages/add-movement";
 import StockLevels from "@/pages/stock-levels";
 import StockDetails from "@/pages/stock-details";
+import BoxesPage from "@/pages/boxes";
+import BoxDetailsPage from "@/pages/box-details";
+import UnboxedPage from "@/pages/unboxed";
 import MovementHistory from "@/pages/movement-history";
 import SoldItems from "@/pages/sold-items";
 import SoldOut from "@/pages/sold-out";
@@ -28,6 +31,9 @@ function Router() {
       <Route path="/movement" component={AddMovement} />
       <Route path="/stock/:smart" component={StockDetails} />
       <Route path="/stock" component={StockLevels} />
+      <Route path="/boxes" component={BoxesPage} />
+      <Route path="/boxes/unboxed" component={UnboxedPage} />
+      <Route path="/boxes/:name" component={BoxDetailsPage} />
       <Route path="/history" component={MovementHistory} />
       <Route path="/sold-out" component={SoldOut} />
       <Route path="/orders" component={SoldItems} />

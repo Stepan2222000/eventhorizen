@@ -10,12 +10,14 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
 import { SmartSearch } from "@/components/smart-search";
+import { BoxSelector } from "@/components/box-selector";
 import type { Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
 
 type OrderItemDraft = {
   smart: string;
   qty: number;
   salePrice: string;
+  boxNumber: string;
 };
 
 type CreateOrderResponse = OrderDetails;
@@ -49,7 +51,7 @@ export default function SoldItems() {
   const [newCustomerPhone, setNewCustomerPhone] = useState("");
   const [newCustomerNote, setNewCustomerNote] = useState("");
   const [orderNote, setOrderNote] = useState("");
-  const [items, setItems] = useState<OrderItemDraft[]>([{ smart: "", qty: 1, salePrice: "" }]);
+  const [items, setItems] = useState<OrderItemDraft[]>([{ smart: "", qty: 1, salePrice: "", boxNumber: "" }]);
   const [shippingMethodId, setShippingMethodId] = useState<string>("");
   const [trackNumber, setTrackNumber] = useState("");
   const [deliveryPrice, setDeliveryPrice] = useState("0");
@@ -114,6 +116,21 @@ export default function SoldItems() {
     });
     queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
     queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+    // Keep BoxSelector and per-SMART pages consistent (staleTime is Infinity).
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/stock/"),
+    });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/boxes"),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
@@ -136,13 +153,40 @@ export default function SoldItems() {
         smart: item.smart.trim(),
         qty: Number(item.qty),
         salePrice: String(item.salePrice).trim(),
+        boxNumber: String(item.boxNumber || "").trim(),
       }));
 
       for (const item of normalizedItems) {
         if (!item.smart) throw new Error("SMART код обязателен для каждой позиции");
         if (!Number.isFinite(item.qty) || item.qty <= 0) throw new Error("Количество должно быть положительным");
+        if (!item.boxNumber) throw new Error("Выберите коробку для каждой позиции");
         if (!item.salePrice || !Number.isFinite(Number(item.salePrice))) throw new Error("Цена продажи должна быть числом");
         if (Number(item.salePrice) < 0) throw new Error("Цена продажи не может быть отрицательной");
+      }
+
+      // Validate per-box availability using cached /api/stock/:smart/boxes data (fetched by BoxSelector).
+      const requestedBySmartBox = new Map<string, { smart: string; boxNumber: string; qty: number }>();
+      for (const item of normalizedItems) {
+        const key = `${item.smart}||${item.boxNumber}`;
+        const prev = requestedBySmartBox.get(key);
+        requestedBySmartBox.set(key, {
+          smart: item.smart,
+          boxNumber: item.boxNumber,
+          qty: (prev?.qty || 0) + item.qty,
+        });
+      }
+
+      for (const entry of Array.from(requestedBySmartBox.values())) {
+        const smartEncoded = encodeURIComponent(entry.smart);
+        const boxRows = queryClient.getQueryData<Array<{ boxNumber: string; qty: number }>>([
+          `/api/stock/${smartEncoded}/boxes`,
+        ]);
+        const available = (boxRows || []).find((r) => r.boxNumber === entry.boxNumber)?.qty;
+        if (typeof available === "number" && entry.qty > available) {
+          throw new Error(
+            `В коробке ${entry.boxNumber} только ${available} шт. ${entry.smart}. Запрошено: ${entry.qty}.`
+          );
+        }
       }
 
       if (!Number.isFinite(deliveryPriceNumber)) throw new Error("Стоимость доставки должна быть числом");
@@ -186,7 +230,7 @@ export default function SoldItems() {
       setNewCustomerPhone("");
       setNewCustomerNote("");
       setOrderNote("");
-      setItems([{ smart: "", qty: 1, salePrice: "" }]);
+      setItems([{ smart: "", qty: 1, salePrice: "", boxNumber: "" }]);
       setShippingMethodId("");
       setTrackNumber("");
       setDeliveryPrice("0");
@@ -206,7 +250,7 @@ export default function SoldItems() {
   };
 
   const addItem = () => {
-    setItems((prev) => [...prev, { smart: "", qty: 1, salePrice: "" }]);
+    setItems((prev) => [...prev, { smart: "", qty: 1, salePrice: "", boxNumber: "" }]);
   };
 
   const removeItem = (index: number) => {
@@ -308,18 +352,33 @@ export default function SoldItems() {
                 </Button>
               </div>
               {items.map((item, index) => (
-                <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_120px_160px_56px] gap-3 items-end rounded-md border p-3">
+                <div
+                  key={index}
+                  className="grid grid-cols-1 md:grid-cols-[1fr_220px_120px_160px_56px] gap-3 items-end rounded-md border p-3"
+                >
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">SMART код</p>
                     <SmartSearch
                       defaultValue={item.smart}
-                      onSelect={(result) => updateItem(index, { smart: result.smart })}
-                      onClear={() => updateItem(index, { smart: "" })}
+                      onSelect={(result) => updateItem(index, { smart: result.smart, boxNumber: "" })}
+                      onClear={() => updateItem(index, { smart: "", boxNumber: "" })}
                       placeholder="Артикул или SMART..."
                       limit={10}
                       showName={false}
                       showSelectedInfo={false}
                       data-testid={`input-order-item-smart-${index}`}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Коробка</p>
+                    <BoxSelector
+                      mode="bySmart"
+                      smart={item.smart}
+                      value={item.boxNumber || null}
+                      onSelect={(value) => updateItem(index, { boxNumber: value || "" })}
+                      placeholder="Выберите коробку..."
+                      required
+                      data-testid={`select-order-item-box-${index}`}
                     />
                   </div>
                   <div>

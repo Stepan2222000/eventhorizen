@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
 import { SmartSearch } from "@/components/smart-search";
+import { BoxSelector } from "@/components/box-selector";
 import { insertMovementSchema } from "@shared/schema";
 import type { InsertMovement, Reason } from "@shared/schema";
 import { z } from "zod";
@@ -25,25 +26,22 @@ const formSchema = insertMovementSchema
       .min(-999999)
       .max(999999)
       .refine((val) => val !== 0, { message: "Количество не может быть равно 0" }),
+    fromBox: z.string().optional().nullable(),
+    toBox: z.string().optional().nullable(),
   })
   .superRefine((data, ctx) => {
-    // Quantity direction rules
-    if (data.reason === "purchase" && data.qtyDelta <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Для покупки количество должно быть положительным", path: ["qtyDelta"] });
-    }
-    if ((data.reason === "sale" || data.reason === "writeoff") && data.qtyDelta >= 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Для продажи/списания количество должно быть отрицательным",
-        path: ["qtyDelta"],
-      });
-    }
-
     // Required fields by reason (specification.md)
     const nonEmpty = (v: unknown) => typeof v === "string" && v.trim().length > 0;
     const isNum = (v: unknown) => nonEmpty(v) && Number.isFinite(Number(v));
 
     if (data.reason === "purchase") {
+      if (data.qtyDelta <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Для покупки количество должно быть положительным",
+          path: ["qtyDelta"],
+        });
+      }
       if (!isNum(data.purchasePrice)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена закупки обязательна", path: ["purchasePrice"] });
       }
@@ -52,16 +50,16 @@ const formSchema = insertMovementSchema
       }
     }
 
-    if (data.reason === "sale") {
-      if (!isNum(data.salePrice)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена продажи обязательна", path: ["salePrice"] });
+    if (data.reason === "writeoff") {
+      if (data.qtyDelta >= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Для списания количество должно быть отрицательным",
+          path: ["qtyDelta"],
+        });
       }
-      // delivery can be 0, but must be present and numeric
-      if (!isNum(data.deliveryPrice)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Стоимость доставки обязательна", path: ["deliveryPrice"] });
-      }
-      if (!data.shippingMethodId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Способ доставки обязателен", path: ["shippingMethodId"] });
+      if (!nonEmpty(data.boxNumber)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Номер коробки обязателен", path: ["boxNumber"] });
       }
     }
 
@@ -69,8 +67,37 @@ const formSchema = insertMovementSchema
       if (!nonEmpty(data.note)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Примечание обязательно для корректировки", path: ["note"] });
       }
+      if (!nonEmpty(data.boxNumber)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Номер коробки обязателен", path: ["boxNumber"] });
+      }
       if (nonEmpty(data.purchasePrice) && !isNum(data.purchasePrice)) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Цена за единицу должна быть числом", path: ["purchasePrice"] });
+      }
+    }
+
+    if (data.reason === "transfer") {
+      const from = typeof data.fromBox === "string" ? data.fromBox.trim() : "";
+      const to = typeof data.toBox === "string" ? data.toBox.trim() : "";
+
+      if (data.qtyDelta <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Для перемещения количество должно быть положительным",
+          path: ["qtyDelta"],
+        });
+      }
+      if (!from) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Коробка-источник обязательна", path: ["fromBox"] });
+      }
+      if (!to) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Коробка-назначение обязательна", path: ["toBox"] });
+      }
+      if (from && to && from === to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Коробка-источник и коробка-назначение не должны совпадать",
+          path: ["toBox"],
+        });
       }
     }
   });
@@ -107,6 +134,8 @@ export default function AddMovement() {
       salePrice: null,
       deliveryPrice: null,
       boxNumber: null,
+      fromBox: null,
+      toBox: null,
       trackNumber: null,
       shippingMethodId: null,
       saleStatus: null,
@@ -128,53 +157,51 @@ export default function AddMovement() {
     queryKey: ["/api/reasons"],
   });
 
-  const { data: shippingMethods } = useQuery<{ id: number; name: string }[]>({
-    queryKey: ["/api/shipping-methods"],
-  });
-
   const availableReasons = (reasons || []).filter((r) => r.code !== "return" && r.code !== "sale");
   const selectedReason = form.watch("reason");
 
-  // Clear hidden fields when reason changes (and also clear stale saleStatus).
+  // Clear hidden fields when reason changes.
   useEffect(() => {
     if (!selectedReason) return;
 
+    // Sales are created via orders; keep sale-only fields empty here.
+    form.setValue("salePrice", null);
+    form.setValue("deliveryPrice", null);
+    form.setValue("trackNumber", null);
+    form.setValue("shippingMethodId", null);
+    form.setValue("saleStatus", null);
+
     if (selectedReason === "purchase") {
-      form.setValue("salePrice", null);
-      form.setValue("deliveryPrice", null);
-      form.setValue("trackNumber", null);
-      form.setValue("shippingMethodId", null);
-      form.setValue("saleStatus", null);
+      form.setValue("fromBox", null);
+      form.setValue("toBox", null);
       return;
     }
 
-    if (selectedReason === "sale") {
+    if (selectedReason === "writeoff") {
       form.setValue("purchasePrice", null);
+      form.setValue("fromBox", null);
+      form.setValue("toBox", null);
+      // Box is chosen from "boxes containing this SMART", clear a stale selection.
       form.setValue("boxNumber", null);
-      // sale fields remain
-      form.setValue("saleStatus", null);
       return;
     }
 
     if (selectedReason === "adjust") {
-      // purchasePrice is optional for adjust, but boxNumber is irrelevant
-      form.setValue("boxNumber", null);
-      form.setValue("salePrice", null);
-      form.setValue("deliveryPrice", null);
-      form.setValue("trackNumber", null);
-      form.setValue("shippingMethodId", null);
-      form.setValue("saleStatus", null);
+      form.setValue("fromBox", null);
+      form.setValue("toBox", null);
       return;
     }
 
-    // writeoff (and any other): clear all extra fields
+    if (selectedReason === "transfer") {
+      form.setValue("purchasePrice", null);
+      form.setValue("boxNumber", null);
+      return;
+    }
+
     form.setValue("purchasePrice", null);
-    form.setValue("salePrice", null);
-    form.setValue("deliveryPrice", null);
     form.setValue("boxNumber", null);
-    form.setValue("trackNumber", null);
-    form.setValue("shippingMethodId", null);
-    form.setValue("saleStatus", null);
+    form.setValue("fromBox", null);
+    form.setValue("toBox", null);
   }, [selectedReason, form]);
 
   // Re-validate qty when reason changes.
@@ -191,11 +218,24 @@ export default function AddMovement() {
 
   const createMovementMutation = useMutation({
     mutationFn: async (data: FormData) => {
+      if (data.reason === "transfer") {
+        const payload = {
+          smart: data.smart.trim(),
+          qty: Number(data.qtyDelta),
+          fromBox: data.fromBox,
+          toBox: data.toBox,
+          note: typeof data.note === "string" && data.note.trim() ? data.note.trim() : null,
+        };
+        const response = await apiRequest("POST", "/api/boxes/transfer", payload);
+        return response.json();
+      }
+
       const response = await apiRequest("POST", "/api/movements", data as InsertMovement);
       return response.json();
     },
     onSuccess: (_movement, variables) => {
       const smart = variables.smart;
+      const smartEncoded = encodeURIComponent(String(smart || "").trim());
 
       // Full invalidation set (staleTime is Infinity by design).
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
@@ -205,13 +245,20 @@ export default function AddMovement() {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smartEncoded}/boxes`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
 
       toast({
-        title: "Движение записано",
-        description: "Движение товара успешно зарегистрировано",
+        title: variables.reason === "transfer" ? "Перемещение выполнено" : "Движение записано",
+        description:
+          variables.reason === "transfer"
+            ? "Товар перемещён между коробками"
+            : "Движение товара успешно зарегистрировано",
       });
 
       resetForm();
@@ -304,7 +351,8 @@ export default function AddMovement() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>
-                            Изменение количества <span className="text-destructive">*</span>
+                            {selectedReason === "transfer" ? "Количество" : "Изменение количества"}{" "}
+                            <span className="text-destructive">*</span>
                           </FormLabel>
                           <FormControl>
                             <Input
@@ -396,11 +444,12 @@ export default function AddMovement() {
                                 Номер коробки <span className="text-destructive">*</span>
                               </FormLabel>
                               <FormControl>
-                                <Input
-                                  placeholder="Например: K-123"
-                                  value={field.value ?? ""}
-                                  onChange={(e) => field.onChange(e.target.value || null)}
-                                  data-testid="input-box-number"
+                                <BoxSelector
+                                  value={field.value}
+                                  onSelect={field.onChange}
+                                  required
+                                  mode="all"
+                                  data-testid="select-box-number"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -410,50 +459,114 @@ export default function AddMovement() {
                       </>
                     )}
 
-                    {/* sale fields */}
-                    {selectedReason === "sale" && (
+                    {/* transfer fields */}
+                    {selectedReason === "transfer" && (
                       <>
                         <FormField
                           control={form.control}
-                          name="salePrice"
-                          render={({ field }) => {
-                            const salePrice = field.value ? Number(field.value) : 0;
-                            const qtyDelta = form.watch("qtyDelta");
-                            const totalAmount = Math.abs(qtyDelta) * salePrice;
-
-                            return (
-                              <FormItem>
-                                <FormLabel>
-                                  Цена за единицу товара <span className="text-destructive">*</span>
-                                </FormLabel>
-                                <FormControl>
-                                  <Input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                    value={field.value ?? ""}
-                                    onChange={(e) => field.onChange(e.target.value || null)}
-                                    data-testid="input-sale-price"
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                                {salePrice > 0 && qtyDelta !== 0 && (
-                                  <p className="text-xs text-muted-foreground mt-1">
-                                    <i className="fas fa-calculator mr-1"></i>
-                                    Общая сумма: {totalAmount.toFixed(2)} ₽
-                                  </p>
-                                )}
-                              </FormItem>
-                            );
-                          }}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="deliveryPrice"
+                          name="fromBox"
                           render={({ field }) => (
                             <FormItem>
                               <FormLabel>
-                                Стоимость доставки <span className="text-destructive">*</span>
+                                Из коробки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <BoxSelector
+                                  value={field.value}
+                                  onSelect={field.onChange}
+                                  required
+                                  mode="bySmart"
+                                  smart={form.watch("smart")}
+                                  data-testid="select-transfer-from-box"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="toBox"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                В коробку <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <BoxSelector
+                                  value={field.value}
+                                  onSelect={field.onChange}
+                                  required
+                                  mode="all"
+                                  exclude={[String(form.watch("fromBox") || "")].filter(Boolean)}
+                                  data-testid="select-transfer-to-box"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </>
+                    )}
+
+                    {/* writeoff fields */}
+                    {selectedReason === "writeoff" && (
+                      <FormField
+                        control={form.control}
+                        name="boxNumber"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              Номер коробки <span className="text-destructive">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <BoxSelector
+                                value={field.value}
+                                onSelect={field.onChange}
+                                required
+                                mode="bySmart"
+                                smart={form.watch("smart")}
+                                data-testid="select-writeoff-box"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+
+                    {/* adjust fields */}
+                    {selectedReason === "adjust" && (
+                      <>
+                        <FormField
+                          control={form.control}
+                          name="boxNumber"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Номер коробки <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <BoxSelector
+                                  value={field.value}
+                                  onSelect={field.onChange}
+                                  required
+                                  mode="all"
+                                  data-testid="select-adjust-box"
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name="purchasePrice"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                Цена за единицу{" "}
+                                <span className="text-muted-foreground font-normal">(опционально)</span>
                               </FormLabel>
                               <FormControl>
                                 <Input
@@ -462,56 +575,7 @@ export default function AddMovement() {
                                   placeholder="0.00"
                                   value={field.value ?? ""}
                                   onChange={(e) => field.onChange(e.target.value || null)}
-                                  data-testid="input-delivery-price"
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="shippingMethodId"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Способ доставки <span className="text-destructive">*</span>
-                              </FormLabel>
-                              <Select
-                                onValueChange={(value) => field.onChange(Number.parseInt(value, 10))}
-                                value={field.value?.toString() || ""}
-                              >
-                                <FormControl>
-                                  <SelectTrigger data-testid="select-shipping-method">
-                                    <SelectValue placeholder="Выберите способ доставки" />
-                                  </SelectTrigger>
-                                </FormControl>
-                                <SelectContent>
-                                  {(shippingMethods || []).map((method) => (
-                                    <SelectItem key={method.id} value={method.id.toString()}>
-                                      {method.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="trackNumber"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>
-                                Трек-номер <span className="text-muted-foreground font-normal">(опционально)</span>
-                              </FormLabel>
-                              <FormControl>
-                                <Input
-                                  placeholder="Например: RA123456789RU"
-                                  value={field.value ?? ""}
-                                  onChange={(e) => field.onChange(e.target.value || null)}
-                                  data-testid="input-track-number"
+                                  data-testid="input-adjust-unit-price"
                                 />
                               </FormControl>
                               <FormMessage />
@@ -519,33 +583,6 @@ export default function AddMovement() {
                           )}
                         />
                       </>
-                    )}
-
-                    {/* adjust fields */}
-                    {selectedReason === "adjust" && (
-                      <FormField
-                        control={form.control}
-                        name="purchasePrice"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>
-                              Цена за единицу{" "}
-                              <span className="text-muted-foreground font-normal">(опционально)</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                value={field.value ?? ""}
-                                onChange={(e) => field.onChange(e.target.value || null)}
-                                data-testid="input-adjust-unit-price"
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
                     )}
                   </div>
 
@@ -583,12 +620,12 @@ export default function AddMovement() {
                       {createMovementMutation.isPending ? (
                         <>
                           <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                          Запись...
+                          {selectedReason === "transfer" ? "Перемещение..." : "Запись..."}
                         </>
                       ) : (
                         <>
-                          <i className="fas fa-check mr-2"></i>
-                          Записать движение
+                          <i className={`fas ${selectedReason === "transfer" ? "fa-right-left" : "fa-check"} mr-2`}></i>
+                          {selectedReason === "transfer" ? "Переместить" : "Записать движение"}
                         </>
                       )}
                     </Button>

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncpg
 
+from .normalization import normalize_box_name
+
 DEFAULT_SHIPPING_METHODS: tuple[tuple[str, bool], ...] = (
     ("Почта России", False),
     ("Яндекс", False),
@@ -107,6 +109,139 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
                 ADD COLUMN IF NOT EXISTS {column_name} {column_type}
                 """
             )
+
+        # Link paired movements (used for transfers).
+        await conn.execute("ALTER TABLE inventory.movements ADD COLUMN IF NOT EXISTS linked_movement_id INTEGER")
+        await conn.execute(
+            """
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'movements_linked_movement_id_fkey'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.movements
+                  ADD CONSTRAINT movements_linked_movement_id_fkey
+                  FOREIGN KEY (linked_movement_id)
+                  REFERENCES inventory.movements(id);
+              END IF;
+            END
+            $$;
+            """
+        )
+
+        # Boxes registry.
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS inventory.boxes (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(50) NOT NULL,
+              name_norm VARCHAR(64) NOT NULL,
+              description TEXT,
+              is_active BOOLEAN NOT NULL DEFAULT TRUE,
+              created_at TIMESTAMP DEFAULT NOW() NOT NULL
+            )
+            """
+        )
+
+        # Normalize existing movement box values (trim + treat empty as NULL).
+        await conn.execute(
+            """
+            UPDATE inventory.movements
+            SET box_number = NULL
+            WHERE box_number IS NOT NULL
+              AND LENGTH(TRIM(box_number)) = 0
+            """
+        )
+        await conn.execute(
+            """
+            UPDATE inventory.movements
+            SET box_number = TRIM(box_number)
+            WHERE box_number IS NOT NULL
+              AND box_number <> TRIM(box_number)
+            """
+        )
+
+        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS boxes_name_norm_uidx ON inventory.boxes (name_norm)")
+        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS boxes_name_uidx ON inventory.boxes (name)")
+
+        # Seed boxes from historical movements (idempotent).
+        existing_box_rows = await conn.fetch("SELECT name_norm, name FROM inventory.boxes")
+        existing_by_norm = {str(r.get("name_norm")): str(r.get("name")) for r in existing_box_rows}
+
+        movement_box_rows = await conn.fetch(
+            """
+            SELECT box_number, COUNT(*)::bigint AS cnt
+            FROM inventory.movements
+            WHERE box_number IS NOT NULL
+              AND LENGTH(TRIM(box_number)) > 0
+            GROUP BY box_number
+            """
+        )
+
+        variants_by_norm: dict[str, list[tuple[str, int]]] = {}
+        for row in movement_box_rows:
+            raw = str(row.get("box_number") or "").strip()
+            if not raw:
+                continue
+            norm = normalize_box_name(raw)
+            if not norm:
+                continue
+            variants_by_norm.setdefault(norm, []).append((raw, int(row.get("cnt") or 0)))
+
+        canonical_by_norm: dict[str, str] = {}
+        for norm, variants in variants_by_norm.items():
+            existing_name = existing_by_norm.get(norm)
+            if existing_name:
+                canonical_by_norm[norm] = existing_name
+                continue
+
+            # Choose a canonical display name deterministically:
+            # most frequent variant first, then lexicographically.
+            variants_sorted = sorted(variants, key=lambda v: (-v[1], v[0]))
+            canonical = variants_sorted[0][0]
+            await conn.execute(
+                """
+                INSERT INTO inventory.boxes (name, name_norm, description, is_active, created_at)
+                VALUES ($1, $2, NULL, TRUE, NOW())
+                ON CONFLICT (name_norm) DO NOTHING
+                """,
+                canonical,
+                norm,
+            )
+            canonical_by_norm[norm] = canonical
+
+        # Canonicalize movements.box_number to the registry name (prevents duplicates like "К-4" vs "K-4").
+        for norm, variants in variants_by_norm.items():
+            canonical = canonical_by_norm.get(norm)
+            if not canonical:
+                continue
+            for variant, _cnt in variants:
+                if variant == canonical:
+                    continue
+                await conn.execute(
+                    "UPDATE inventory.movements SET box_number = $1 WHERE box_number = $2",
+                    canonical,
+                    variant,
+                )
+
+        # Computed view of box contents (non-empty boxes only, non-zero balances only).
+        await conn.execute(
+            """
+            CREATE OR REPLACE VIEW inventory.box_contents AS
+            SELECT
+              box_number,
+              smart,
+              SUM(qty_delta) AS qty
+            FROM inventory.movements
+            WHERE box_number IS NOT NULL
+              AND LENGTH(TRIM(box_number)) > 0
+            GROUP BY box_number, smart
+            HAVING SUM(qty_delta) <> 0
+            """
+        )
 
         await conn.execute(
             """
@@ -318,6 +453,8 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_smart_idx ON inventory.movements (smart)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_reason_idx ON inventory.movements (reason)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_created_at_idx ON inventory.movements (created_at DESC)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS movements_box_number_idx ON inventory.movements (box_number)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS movements_linked_movement_id_idx ON inventory.movements (linked_movement_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_sale_status_idx ON inventory.movements (sale_status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_order_id_idx ON inventory.movements (order_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_order_item_id_idx ON inventory.movements (order_item_id)")

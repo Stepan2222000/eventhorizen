@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, model_validator
 
 
-ReasonCode = Literal["purchase", "sale", "return", "writeoff", "adjust"]
+ReasonCode = Literal["purchase", "sale", "return", "writeoff", "adjust", "transfer"]
 SaleStatus = Literal["awaiting_shipment", "shipped"]
 ShipmentStatus = Literal["pending", "shipped", "delivered"]
 DeliveryPayer = Literal["seller", "buyer"]
@@ -17,6 +17,7 @@ REASON_CODES: tuple[ReasonCode, ...] = (
     "return",
     "writeoff",
     "adjust",
+    "transfer",
 )
 
 
@@ -39,6 +40,7 @@ REASONS: list[Reason] = [
     Reason(code="return", title="Возврат"),
     Reason(code="writeoff", title="Списание"),
     Reason(code="adjust", title="Корректировка"),
+    Reason(code="transfer", title="Перемещение"),
 ]
 
 
@@ -69,6 +71,8 @@ class Movement(BaseModel):
     orderItemId: int | None
     shipmentId: int | None
     returnId: int | None
+
+    linkedMovementId: int | None = None
 
     createdAt: str
 
@@ -194,6 +198,7 @@ class OrderItemInput(BaseModel):
     smart: str
     qty: int
     salePrice: str
+    boxNumber: str
 
 
 class ShipmentInput(BaseModel):
@@ -225,6 +230,7 @@ class OrderItem(BaseModel):
     smart: str
     qty: int
     salePrice: str
+    boxNumber: str | None = None
     returnedQty: int
     shippedQty: int
     createdAt: str
@@ -322,6 +328,7 @@ class UpdateShipmentStatusInput(BaseModel):
 class CreateOrderReturnItem(BaseModel):
     orderItemId: int
     qty: int
+    boxNumber: str
 
 
 class CreateOrderReturnInput(BaseModel):

@@ -7,6 +7,7 @@ export const reasonCodeSchema = z.enum([
   "return",
   "writeoff",
   "adjust",
+  "transfer",
 ]);
 export type ReasonCode = z.infer<typeof reasonCodeSchema>;
 
@@ -39,6 +40,7 @@ export const REASONS: Reason[] = [
   { code: "return", title: "Возврат" },
   { code: "writeoff", title: "Списание" },
   { code: "adjust", title: "Корректировка" },
+  { code: "transfer", title: "Перемещение" },
 ];
 
 export type ShippingMethod = {
@@ -72,6 +74,8 @@ export type Movement = {
   orderItemId: number | null;
   shipmentId: number | null;
   returnId: number | null;
+
+  linkedMovementId?: number | null;
 
   createdAt: string;
 
@@ -107,6 +111,22 @@ export type InsertMovement = z.infer<typeof insertMovementSchema>;
 export type StockLevel = {
   smart: string;
   totalQty: number;
+  name?: string | null;
+  brand?: string[] | null;
+  description?: string[] | null;
+  articles?: string[];
+  boxes?: Array<{ boxNumber: string; qty: number }>;
+};
+
+export type StockBoxQty = { boxNumber: string; qty: number };
+
+export type StockBySmart = {
+  smart: string;
+  totalQty: number;
+  boxedQty: number;
+  unboxedQty: number;
+  boxes: StockBoxQty[];
+  existed: boolean;
   name?: string | null;
   brand?: string[] | null;
   description?: string[] | null;
@@ -217,6 +237,7 @@ export const orderItemInputSchema = z.object({
     "Цена продажи должна быть числом",
     "Цена продажи не может быть отрицательной"
   ),
+  boxNumber: z.string().min(1, "Коробка обязательна"),
 });
 
 export type OrderItemInput = z.infer<typeof orderItemInputSchema>;
@@ -267,6 +288,7 @@ export type OrderItem = {
   smart: string;
   qty: number;
   salePrice: string;
+  boxNumber?: string | null;
   returnedQty: number;
   shippedQty: number;
   createdAt: string;
@@ -366,6 +388,7 @@ export type UpdateShipmentStatusInput = z.infer<typeof updateShipmentStatusSchem
 export const createOrderReturnItemSchema = z.object({
   orderItemId: z.number().int().positive(),
   qty: z.number().int().positive(),
+  boxNumber: z.string().min(1, "Коробка обязательна"),
 });
 
 export const createOrderReturnSchema = z

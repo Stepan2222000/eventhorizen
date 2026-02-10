@@ -37,6 +37,19 @@ export default function BulkImport() {
       setImportResult(result);
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/stock/"),
+      });
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/boxes"),
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
+import { BoxSelector } from "@/components/box-selector";
 import type {
   DeliveryPayer,
   OrderDetails,
@@ -57,6 +58,7 @@ export default function OrderDetailsPage() {
   const [returnShippingMethodId, setReturnShippingMethodId] = useState<string>("");
   const [returnTrackNumber, setReturnTrackNumber] = useState("");
   const [returnQtyByItem, setReturnQtyByItem] = useState<Record<number, number>>({});
+  const [returnBoxByItem, setReturnBoxByItem] = useState<Record<number, string>>({});
 
   const { data: order, isLoading } = useQuery<OrderDetails>({
     queryKey: [`/api/orders/${orderId}`],
@@ -75,10 +77,13 @@ export default function OrderDetailsPage() {
     }
     setShipmentStatusDraft(next);
     const initialReturnQty: Record<number, number> = {};
+    const initialReturnBoxes: Record<number, string> = {};
     for (const item of order.items) {
       initialReturnQty[item.id] = 0;
+      initialReturnBoxes[item.id] = String(item.boxNumber || "").trim();
     }
     setReturnQtyByItem(initialReturnQty);
+    setReturnBoxByItem(initialReturnBoxes);
   }, [order]);
 
   const invalidateRelated = () => {
@@ -86,6 +91,20 @@ export default function OrderDetailsPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
     queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
     queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/stock/"),
+    });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/boxes"),
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
@@ -118,6 +137,7 @@ export default function OrderDetailsPage() {
           orderItemId: item.id,
           qty: Number(returnQtyByItem[item.id] || 0),
           maxQty: Math.max(0, item.qty - item.returnedQty),
+          boxNumber: String(returnBoxByItem[item.id] || "").trim(),
         }))
         .filter((item) => item.qty > 0);
 
@@ -128,6 +148,9 @@ export default function OrderDetailsPage() {
         if (item.qty > item.maxQty) {
           throw new Error(`Для позиции #${item.orderItemId} превышено максимальное количество`);
         }
+        if (!item.boxNumber) {
+          throw new Error(`Выберите коробку для возврата позиции #${item.orderItemId}`);
+        }
       }
 
       const payload: Record<string, unknown> = {
@@ -137,7 +160,7 @@ export default function OrderDetailsPage() {
         returnPayer: Number(returnPrice || 0) > 0 ? returnPayer : null,
         shippingMethodId: returnShippingMethodId ? Number(returnShippingMethodId) : null,
         trackNumber: returnTrackNumber.trim() || null,
-        items: items.map((item) => ({ orderItemId: item.orderItemId, qty: item.qty })),
+        items: items.map((item) => ({ orderItemId: item.orderItemId, qty: item.qty, boxNumber: item.boxNumber })),
       };
 
       const response = await apiRequest("POST", `/api/orders/${order.id}/returns`, payload);
@@ -245,6 +268,12 @@ export default function OrderDetailsPage() {
                       <div>
                         <p className="font-mono font-semibold">{item.smart}</p>
                         <p className="text-xs text-muted-foreground">{item.name || "—"}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Коробка:{" "}
+                          <span className="font-mono font-semibold text-foreground">
+                            {item.boxNumber || "—"}
+                          </span>
+                        </p>
                       </div>
                       <div className="text-sm text-right">
                         <p>{item.qty} шт × {item.salePrice} ₽</p>
@@ -253,7 +282,7 @@ export default function OrderDetailsPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-[180px_1fr] gap-3 items-center">
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-[180px_260px_1fr] gap-3 items-start">
                       <div>
                         <p className="text-xs text-muted-foreground mb-1">Количество к возврату</p>
                         <Input
@@ -268,6 +297,23 @@ export default function OrderDetailsPage() {
                             }))
                           }
                           data-testid={`input-return-qty-${item.id}`}
+                        />
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Куда положить</p>
+                        <BoxSelector
+                          mode="all"
+                          value={returnBoxByItem[item.id] || null}
+                          onSelect={(value) =>
+                            setReturnBoxByItem((prev) => ({
+                              ...prev,
+                              [item.id]: value || "",
+                            }))
+                          }
+                          placeholder="Выберите коробку..."
+                          disabled={maxReturn === 0}
+                          required={Number(returnQtyByItem[item.id] || 0) > 0}
+                          data-testid={`select-return-box-${item.id}`}
                         />
                       </div>
                       <p className="text-xs text-muted-foreground">Можно вернуть максимум: {maxReturn} шт</p>

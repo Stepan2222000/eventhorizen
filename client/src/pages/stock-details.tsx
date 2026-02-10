@@ -6,12 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Page } from "@/components/page";
-import type { Movement } from "@shared/schema";
+import { BoxSelector } from "@/components/box-selector";
+import type { Movement, StockBySmart } from "@shared/schema";
 import { format } from "date-fns";
 
 export default function StockDetails() {
@@ -19,6 +21,17 @@ export default function StockDetails() {
   const { toast } = useToast();
   const [editingCell, setEditingCell] = useState<{id: number, field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'} | null>(null);
   const [editValue, setEditValue] = useState<string>("");
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferFromBox, setTransferFromBox] = useState<string | null>(null);
+  const [transferToBox, setTransferToBox] = useState<string | null>(null);
+  const [transferQty, setTransferQty] = useState<number>(1);
+  const [transferMax, setTransferMax] = useState<number>(0);
+  const [transferNote, setTransferNote] = useState<string>("");
+
+  const { data: stockInfo, isLoading: stockInfoLoading } = useQuery<StockBySmart>({
+    queryKey: [`/api/stock/${smart}`],
+    enabled: !!smart,
+  });
 
   const { data: purchasesData, isLoading } = useQuery<Movement[]>({
     queryKey: [`/api/stock/${smart}/purchases`],
@@ -90,10 +103,14 @@ export default function StockDetails() {
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${encodeURIComponent(String(smart || ""))}/boxes`] });
       queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
       toast({
         title: "Сохранено",
         description: "Изменения успешно сохранены",
@@ -121,6 +138,15 @@ export default function StockDetails() {
 
   const handleEditSave = () => {
     if (editingCell) {
+      if (editingCell.field === "boxNumber" && !editValue.trim()) {
+        toast({
+          title: "Ошибка",
+          description: "Номер коробки обязателен",
+          variant: "destructive",
+        });
+        return;
+      }
+
       updateMutation.mutate({
         id: editingCell.id,
         field: editingCell.field,
@@ -135,6 +161,65 @@ export default function StockDetails() {
     const qty = Math.abs(purchase.qtyDelta);
     return (price * qty).toFixed(2);
   };
+
+  const startTransfer = (fromBox: string, maxQty: number) => {
+    setTransferFromBox(fromBox);
+    setTransferMax(maxQty);
+    setTransferQty(1);
+    setTransferToBox(null);
+    setTransferNote("");
+    setTransferOpen(true);
+  };
+
+  const transferMutation = useMutation({
+    mutationFn: async () => {
+      if (!smart) throw new Error("SMART код не указан");
+      if (!transferFromBox) throw new Error("Коробка-источник не выбрана");
+      if (!transferToBox) throw new Error("Выберите коробку назначения");
+
+      const qty = Number(transferQty);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error("Количество должно быть положительным");
+      }
+      if (transferMax > 0 && qty > transferMax) {
+        throw new Error(`Нельзя переместить больше, чем есть в коробке (макс. ${transferMax})`);
+      }
+
+      const payload = {
+        smart,
+        qty,
+        fromBox: transferFromBox,
+        toBox: transferToBox,
+        note: transferNote.trim() || null,
+      };
+      const res = await apiRequest("POST", "/api/boxes/transfer", payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/purchases`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}/sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${encodeURIComponent(String(smart || ""))}/boxes`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+
+      toast({
+        title: "Перемещение выполнено",
+        description: "Товар перемещён между коробками",
+      });
+      setTransferOpen(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Ошибка перемещения",
+        description: error?.message || "Не удалось выполнить перемещение",
+        variant: "destructive",
+      });
+    },
+  });
 
   if (!smart) {
     return (
@@ -197,6 +282,112 @@ export default function StockDetails() {
               </div>
             </CardContent>
           )}
+        </Card>
+
+        <Card className="bg-card border-border mb-6">
+          <CardHeader>
+            <CardTitle>Распределение по коробкам</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {stockInfoLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : !stockInfo || !stockInfo.existed ? (
+              <p className="text-sm text-muted-foreground">Нет данных по этому SMART</p>
+            ) : (
+              <div className="space-y-3">
+	                {(() => {
+	                  const delta = Number(stockInfo.unboxedQty || 0);
+	                  const unboxed = Math.max(delta, 0);
+	                  const overboxed = Math.max(-delta, 0);
+
+	                  return (
+	                    <>
+	                <div className="text-sm text-muted-foreground">
+	                  В коробках:{" "}
+	                  <span className="font-mono font-semibold text-foreground">{stockInfo.boxedQty}</span>{" "}
+	                  · Без коробки:{" "}
+	                  <span className="font-mono font-semibold text-foreground">{unboxed}</span>{" "}
+                  {overboxed > 0 && (
+                    <>
+                      · Расхождение:{" "}
+                      <span className="font-mono font-semibold text-destructive">{overboxed}</span>{" "}
+                    </>
+                  )}
+                  · Всего:{" "}
+                  <span className="font-mono font-semibold text-foreground">{stockInfo.totalQty}</span>
+                </div>
+
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-[180px]">Коробка</TableHead>
+                        <TableHead className="text-right w-[120px]">Кол-во</TableHead>
+                        <TableHead className="text-right w-[140px]">Действия</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {stockInfo.boxes.length === 0 && stockInfo.totalQty === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                            Нет остатков
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        <>
+                          {stockInfo.boxes.map((row) => (
+                            <TableRow key={row.boxNumber} className="hover:bg-muted/50">
+                              <TableCell>
+                                <Link href={`/boxes/${encodeURIComponent(row.boxNumber)}`}>
+                                  <Button variant="ghost" size="sm" className="h-auto px-2 font-mono">
+                                    {row.boxNumber}
+                                  </Button>
+                                </Link>
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold">{row.qty}</TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => startTransfer(row.boxNumber, row.qty)}
+                                  disabled={row.qty <= 0}
+                                  data-testid={`button-transfer-from-${row.boxNumber}`}
+                                >
+                                  Переместить
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+
+                          {unboxed > 0 && (
+                            <TableRow className="hover:bg-muted/50">
+                              <TableCell className="font-semibold">Без коробки</TableCell>
+                              <TableCell className="text-right font-mono font-semibold">{unboxed}</TableCell>
+                              <TableCell className="text-right text-sm text-muted-foreground">—</TableCell>
+                            </TableRow>
+                          )}
+                          {overboxed > 0 && (
+                            <TableRow className="bg-destructive/5 hover:bg-destructive/10">
+                              <TableCell className="font-semibold">Расхождение</TableCell>
+                              <TableCell className="text-right font-mono font-semibold text-destructive">{overboxed}</TableCell>
+                              <TableCell className="text-right text-sm text-muted-foreground">—</TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      )}
+                    </TableBody>
+	                  </Table>
+	                </div>
+	                    </>
+	                  );
+	                })()}
+	              </div>
+	            )}
+          </CardContent>
         </Card>
 
         <Card className="bg-card border-border">
@@ -402,18 +593,15 @@ export default function StockDetails() {
                           <td className="p-4 align-middle whitespace-nowrap">
                             {editingCell?.id === purchase.id && editingCell.field === 'boxNumber' ? (
                               <div className="flex items-center gap-1">
-                                <Input
-                                  type="text"
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
-                                  className="w-24 border-2 border-primary font-mono h-8"
-                                  autoFocus
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleEditSave();
-                                    if (e.key === 'Escape') handleEditCancel();
-                                  }}
-                                  data-testid={`input-edit-box-${purchase.id}`}
-                                />
+                                <div className="min-w-[140px]">
+                                  <BoxSelector
+                                    mode="all"
+                                    value={editValue || null}
+                                    onSelect={(value) => setEditValue(value || "")}
+                                    required
+                                    data-testid={`select-edit-box-${purchase.id}`}
+                                  />
+                                </div>
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -626,6 +814,64 @@ export default function StockDetails() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={transferOpen} onOpenChange={setTransferOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Перемещение</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">SMART</p>
+                <Input value={smart} readOnly className="font-mono" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Из коробки</p>
+                <Input value={transferFromBox || ""} readOnly className="font-mono" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Количество (макс. {transferMax})</p>
+                <Input
+                  type="number"
+                  min={1}
+                  max={transferMax}
+                  value={transferQty}
+                  onChange={(e) => setTransferQty(Number(e.target.value) || 1)}
+                  data-testid="input-transfer-qty"
+                />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">В коробку</p>
+                <BoxSelector
+                  mode="all"
+                  value={transferToBox}
+                  onSelect={setTransferToBox}
+                  exclude={[String(transferFromBox || "")].filter(Boolean)}
+                  placeholder="Выберите коробку назначения"
+                  data-testid="select-transfer-to-box"
+                />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Примечание</p>
+                <Input
+                  value={transferNote}
+                  onChange={(e) => setTransferNote(e.target.value)}
+                  placeholder="Опционально"
+                  data-testid="input-transfer-note"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                onClick={() => transferMutation.mutate()}
+                disabled={transferMutation.isPending}
+                data-testid="button-submit-transfer"
+              >
+                {transferMutation.isPending ? "Перемещение..." : "Переместить"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     </Page>
   );
 }
