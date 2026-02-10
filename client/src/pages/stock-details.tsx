@@ -19,7 +19,7 @@ import { format } from "date-fns";
 export default function StockDetails() {
   const { smart } = useParams();
   const { toast } = useToast();
-  const [editingCell, setEditingCell] = useState<{id: number, field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'} | null>(null);
+  const [editingCell, setEditingCell] = useState<{ id: number; field: "purchasePrice" | "note" } | null>(null);
   const [editValue, setEditValue] = useState<string>("");
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferFromBox, setTransferFromBox] = useState<string | null>(null);
@@ -86,17 +86,9 @@ export default function StockDetails() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, field, value }: { id: number; field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber'; value: string | number | null }) => {
+    mutationFn: async ({ id, field, value }: { id: number; field: "purchasePrice" | "note"; value: string | number | null }) => {
       const payload: any = {};
-      if (field === 'qtyDelta') {
-        const numValue = parseInt(value as string);
-        if (!value || isNaN(numValue) || numValue <= 0) {
-          throw new Error('Количество должно быть положительным числом');
-        }
-        payload[field] = numValue;
-      } else {
-        payload[field] = value;
-      }
+      payload[field] = value;
       return await apiRequest('PATCH', `/api/movements/${id}`, payload);
     },
     onSuccess: () => {
@@ -126,7 +118,7 @@ export default function StockDetails() {
     },
   });
 
-  const handleEditStart = (id: number, field: 'purchasePrice' | 'note' | 'qtyDelta' | 'boxNumber', currentValue: string | number | null) => {
+  const handleEditStart = (id: number, field: "purchasePrice" | "note", currentValue: string | number | null) => {
     setEditingCell({ id, field });
     setEditValue(currentValue?.toString() || "");
   };
@@ -138,15 +130,6 @@ export default function StockDetails() {
 
   const handleEditSave = () => {
     if (editingCell) {
-      if (editingCell.field === "boxNumber" && !editValue.trim()) {
-        toast({
-          title: "Ошибка",
-          description: "Номер коробки обязателен",
-          variant: "destructive",
-        });
-        return;
-      }
-
       updateMutation.mutate({
         id: editingCell.id,
         field: editingCell.field,
@@ -256,29 +239,36 @@ export default function StockDetails() {
           </CardHeader>
           {purchases && purchases.length > 0 && (
             <CardContent>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <p className="text-xs text-muted-foreground mb-4">За всё время</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-6 gap-y-4">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Всего покупок</p>
-                  <p className="text-2xl font-semibold text-foreground">{purchases.length}</p>
+                  <p className="text-xs text-muted-foreground mb-0.5">Операций поступления</p>
+                  <p className="text-2xl font-semibold tabular-nums">{purchases.length}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Общее количество</p>
-                  <p className="text-2xl font-semibold text-foreground">
-                    {totalPurchasedQty}
-                  </p>
+                  <p className="text-xs text-muted-foreground mb-0.5">Поступило, шт</p>
+                  <p className="text-2xl font-semibold tabular-nums">{totalPurchasedQty}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Средняя цена</p>
-                  <p className="text-2xl font-semibold text-foreground">
+                  <p className="text-xs text-muted-foreground mb-0.5">Средняя цена</p>
+                  <p className="text-2xl font-semibold tabular-nums">
                     {avgPurchasePrice !== null ? `${avgPurchasePrice.toFixed(2)} ₽` : "—"}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Всего затрат</p>
-                  <p className="text-2xl font-semibold text-foreground">
+                  <p className="text-xs text-muted-foreground mb-0.5">Сумма закупок</p>
+                  <p className="text-2xl font-semibold tabular-nums">
                     {totalPurchaseCost !== null ? `${totalPurchaseCost.toFixed(2)} ₽` : "—"}
                   </p>
                 </div>
+                {stockInfo && totalPurchasedQty > stockInfo.totalQty && (
+                  <div className="col-span-2 sm:col-span-1">
+                    <p className="text-xs text-muted-foreground mb-0.5">Продано / списано</p>
+                    <p className="text-2xl font-semibold tabular-nums text-muted-foreground">
+                      {totalPurchasedQty - stockInfo.totalQty} шт
+                    </p>
+                  </div>
+                )}
               </div>
             </CardContent>
           )}
@@ -287,6 +277,7 @@ export default function StockDetails() {
         <Card className="bg-card border-border mb-6">
           <CardHeader>
             <CardTitle>Распределение по коробкам</CardTitle>
+            <p className="text-sm text-muted-foreground font-normal mt-1">Текущее наличие на складе</p>
           </CardHeader>
           <CardContent>
             {stockInfoLoading ? (
@@ -306,28 +297,30 @@ export default function StockDetails() {
 
 	                  return (
 	                    <>
-	                <div className="text-sm text-muted-foreground">
-	                  В коробках:{" "}
-	                  <span className="font-mono font-semibold text-foreground">{stockInfo.boxedQty}</span>{" "}
-	                  · Без коробки:{" "}
-	                  <span className="font-mono font-semibold text-foreground">{unboxed}</span>{" "}
+	                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+	                  <span className="text-muted-foreground">
+	                    В коробках: <span className="font-mono font-semibold text-foreground">{stockInfo.boxedQty}</span>
+	                  </span>
+	                  <span className="text-muted-foreground">
+	                    Без коробки: <span className="font-mono font-semibold text-foreground">{unboxed}</span>
+	                  </span>
                   {overboxed > 0 && (
-                    <>
-                      · Расхождение:{" "}
-                      <span className="font-mono font-semibold text-destructive">{overboxed}</span>{" "}
-                    </>
+                    <span className="text-muted-foreground">
+                      Расхождение: <span className="font-mono font-semibold text-destructive">{overboxed}</span>
+                    </span>
                   )}
-                  · Всего:{" "}
-                  <span className="font-mono font-semibold text-foreground">{stockInfo.totalQty}</span>
+                  <span className="text-muted-foreground">
+                    Остаток: <span className="font-mono font-semibold text-foreground">{stockInfo.totalQty} шт</span>
+                  </span>
                 </div>
 
-                <div className="rounded-md border">
-                  <Table>
+                <div className="rounded-md border min-w-0">
+                  <Table className="w-full">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[180px]">Коробка</TableHead>
-                        <TableHead className="text-right w-[120px]">Кол-во</TableHead>
-                        <TableHead className="text-right w-[140px]">Действия</TableHead>
+                        <TableHead className="w-auto min-w-[140px]">Коробка</TableHead>
+                        <TableHead className="text-right w-20">Кол-во</TableHead>
+                        <TableHead className="text-right whitespace-nowrap w-[120px]">Действия</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -438,55 +431,8 @@ export default function StockDetails() {
                           <td className="p-4 align-middle font-mono text-sm whitespace-nowrap">
                             {format(new Date(purchase.createdAt), "dd.MM.yyyy")}
                           </td>
-                          <td className="p-4 align-middle text-right">
-                            {editingCell?.id === purchase.id && editingCell.field === 'qtyDelta' ? (
-                              <div className="flex items-center justify-end gap-1">
-                                <Input
-                                  type="number"
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
-                                  className="w-20 border-2 border-primary font-mono text-right h-8"
-                                  autoFocus
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleEditSave();
-                                    if (e.key === 'Escape') handleEditCancel();
-                                  }}
-                                  data-testid={`input-edit-qty-${purchase.id}`}
-                                />
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={handleEditSave}
-                                  disabled={updateMutation.isPending}
-                                  data-testid={`button-save-qty-${purchase.id}`}
-                                >
-                                  <i className="fas fa-check text-green-500 text-xs"></i>
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={handleEditCancel}
-                                  disabled={updateMutation.isPending}
-                                  data-testid={`button-cancel-qty-${purchase.id}`}
-                                >
-                                  <i className="fas fa-times text-red-500 text-xs"></i>
-                                </Button>
-                              </div>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditStart(purchase.id, 'qtyDelta', Math.abs(purchase.qtyDelta))}
-                                className="h-auto w-full justify-end font-mono font-semibold px-2 py-1 rounded transition-colors group"
-                                data-testid={`button-edit-qty-${purchase.id}`}
-                              >
-                                <span>{Math.abs(purchase.qtyDelta)}</span>
-                                <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </Button>
-                            )}
+                          <td className="p-4 align-middle text-right font-mono font-semibold">
+                            {Math.abs(purchase.qtyDelta)}
                           </td>
                           <td className="p-4 align-middle text-right">
                             {editingCell?.id === purchase.id && editingCell.field === 'purchasePrice' ? (
@@ -591,53 +537,9 @@ export default function StockDetails() {
                             )}
                           </td>
                           <td className="p-4 align-middle whitespace-nowrap">
-                            {editingCell?.id === purchase.id && editingCell.field === 'boxNumber' ? (
-                              <div className="flex items-center gap-1">
-                                <div className="min-w-[140px]">
-                                  <BoxSelector
-                                    mode="all"
-                                    value={editValue || null}
-                                    onSelect={(value) => setEditValue(value || "")}
-                                    required
-                                    data-testid={`select-edit-box-${purchase.id}`}
-                                  />
-                                </div>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={handleEditSave}
-                                  disabled={updateMutation.isPending}
-                                  data-testid={`button-save-box-${purchase.id}`}
-                                >
-                                  <i className="fas fa-check text-green-500 text-xs"></i>
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  onClick={handleEditCancel}
-                                  disabled={updateMutation.isPending}
-                                  data-testid={`button-cancel-box-${purchase.id}`}
-                                >
-                                  <i className="fas fa-times text-red-500 text-xs"></i>
-                                </Button>
-                              </div>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditStart(purchase.id, 'boxNumber', purchase.boxNumber)}
-                                className="h-auto px-2 py-1 rounded transition-colors group inline-flex items-center"
-                                data-testid={`button-edit-box-${purchase.id}`}
-                              >
-                                <Badge variant="outline" className="font-mono whitespace-nowrap">
-                                  {purchase.boxNumber || "—"}
-                                </Badge>
-                                <i className="fas fa-edit text-xs ml-1 opacity-0 group-hover:opacity-50 transition-opacity"></i>
-                              </Button>
-                            )}
+                            <Badge variant="outline" className="font-mono whitespace-nowrap">
+                              {purchase.boxNumber || "—"}
+                            </Badge>
                           </td>
                           <td className="p-4 align-middle text-right font-mono font-bold whitespace-nowrap">
                             {getTotalPrice(purchase) ? `${getTotalPrice(purchase)} ₽` : "—"}
