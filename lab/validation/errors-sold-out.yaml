@@ -1,0 +1,97 @@
+meta:
+  target: feature/sold-out
+  created: 2026-02-10
+  last_updated: 2026-02-10T14:40:45Z
+  agent: validator-1
+  files:
+    - client/src/pages/sold-out.tsx
+    - client/src/lib/queryClient.ts
+    - client/src/App.tsx
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - py_backend/types.py
+    - shared/schema.ts
+
+errors:
+  - id: e-soldout-0001
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      `getSoldOutItems()` считает `avg_sale_price` как `AVG(sale_price)` по движениям продажи.
+      Это среднее по "операциям", а не по количеству проданных единиц.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При продажах разными партиями средняя цена будет заметно искажена.
+      Реалистичный пример:
+      - продали 10 шт по 100
+      - продали 1 шт по 200
+      Сейчас средняя = (100 + 200) / 2 = 150, хотя средняя по штукам должна быть (100*10 + 200*1) / 11 ≈ 109.09.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Средняя цена продажи должна быть взвешенной по количеству:
+      `SUM(sale_price * ABS(qty_delta)) / SUM(ABS(qty_delta))`.
+
+    code_example: |
+      # py_backend/storage.py (getSoldOutItems)
+      AVG(CAST(sale_price AS NUMERIC)) as avg_sale_price,
+
+      # Вариант исправления (идея)
+      (SUM(CAST(sale_price AS NUMERIC) * ABS(qty_delta)) / NULLIF(SUM(ABS(qty_delta)), 0)) as avg_sale_price
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:32:14Z
+        agrees: true
+        note: "Раунд 2: очевидная логическая ошибка в агрегации."
+
+    fix: null
+
+  - id: e-soldout-0002
+    file: client/src/pages/sold-out.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница обрабатывает только `isLoading`. Если запрос упал (500/сеть),
+      React Query выставит `isError=true`, но `items` останется `undefined`.
+      Код воспринимает это как "нет распроданных товаров" и показывает пустое состояние.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При любой ошибке API пользователь увидит ложный "0 результатов",
+      вместо сообщения об ошибке и возможности повторить запрос.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно обрабатывать ошибку (`isError`/`error`) и показывать понятный UI-стейт:
+      "не удалось загрузить" + кнопка retry.
+
+    code_example: |
+      const { data: items, isLoading } = useQuery<SoldOutItem[]>({
+        queryKey: ['/api/sold-out'],
+      });
+
+      ...
+      {!items || items.length === 0 ? (
+        <Card>...Нет распроданных товаров...</Card>
+      ) : (
+        ...
+      )}
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:32:14Z
+        agrees: true
+        note: "Раунд 2: ошибка маскируется под пустой список."
+
+    fix: null
+
+improvements: []

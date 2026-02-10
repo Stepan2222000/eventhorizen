@@ -22,6 +22,8 @@ import BulkImport from "@/pages/bulk-import";
 import Customers from "@/pages/customers";
 import CustomerDetails from "@/pages/customer-details";
 import OrderDetails from "@/pages/order-details";
+import ItemsPage from "@/pages/items";
+import ItemDetailsPage from "@/pages/item-details";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -35,6 +37,8 @@ function Router() {
       <Route path="/boxes/unboxed" component={UnboxedPage} />
       <Route path="/boxes/:name" component={BoxDetailsPage} />
       <Route path="/history" component={MovementHistory} />
+      <Route path="/items" component={ItemsPage} />
+      <Route path="/items/:id" component={ItemDetailsPage} />
       <Route path="/sold-out" component={SoldOut} />
       <Route path="/orders" component={SoldItems} />
       <Route path="/sold" component={SoldItems} />

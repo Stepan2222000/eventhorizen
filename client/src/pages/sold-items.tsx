@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
 import { SmartSearch } from "@/components/smart-search";
 import { BoxSelector } from "@/components/box-selector";
+import { ItemPickerDialog } from "@/components/item-picker-dialog";
 import type { Customer, DeliveryPayer, Movement, OrderDetails, OrderSummary, ShippingMethod } from "@shared/schema";
 
 type OrderItemDraft = {
@@ -18,6 +19,7 @@ type OrderItemDraft = {
   qty: number;
   salePrice: string;
   boxNumber: string;
+  itemIds?: number[];
 };
 
 type CreateOrderResponse = OrderDetails;
@@ -56,6 +58,8 @@ export default function SoldItems() {
   const [trackNumber, setTrackNumber] = useState("");
   const [deliveryPrice, setDeliveryPrice] = useState("0");
   const [deliveryPayer, setDeliveryPayer] = useState<DeliveryPayer>("buyer");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
   const ordersQueryKey = "/api/orders?includeArchived=1";
 
@@ -154,6 +158,7 @@ export default function SoldItems() {
         qty: Number(item.qty),
         salePrice: String(item.salePrice).trim(),
         boxNumber: String(item.boxNumber || "").trim(),
+        itemIds: Array.isArray(item.itemIds) && item.itemIds.length ? item.itemIds : undefined,
       }));
 
       for (const item of normalizedItems) {
@@ -162,6 +167,9 @@ export default function SoldItems() {
         if (!item.boxNumber) throw new Error("Выберите коробку для каждой позиции");
         if (!item.salePrice || !Number.isFinite(Number(item.salePrice))) throw new Error("Цена продажи должна быть числом");
         if (Number(item.salePrice) < 0) throw new Error("Цена продажи не может быть отрицательной");
+        if (item.itemIds && item.itemIds.length !== item.qty) {
+          throw new Error(`Выберите ровно ${item.qty} экземпляров для ${item.smart} (выбрано: ${item.itemIds.length})`);
+        }
       }
 
       // Validate per-box availability using cached /api/stock/:smart/boxes data (fetched by BoxSelector).
@@ -360,8 +368,8 @@ export default function SoldItems() {
                     <p className="text-xs text-muted-foreground mb-1">SMART код</p>
                     <SmartSearch
                       defaultValue={item.smart}
-                      onSelect={(result) => updateItem(index, { smart: result.smart, boxNumber: "" })}
-                      onClear={() => updateItem(index, { smart: "", boxNumber: "" })}
+                      onSelect={(result) => updateItem(index, { smart: result.smart, boxNumber: "", itemIds: [] })}
+                      onClear={() => updateItem(index, { smart: "", boxNumber: "", itemIds: [] })}
                       placeholder="Артикул или SMART..."
                       limit={10}
                       showName={false}
@@ -375,7 +383,7 @@ export default function SoldItems() {
                       mode="bySmart"
                       smart={item.smart}
                       value={item.boxNumber || null}
-                      onSelect={(value) => updateItem(index, { boxNumber: value || "" })}
+                      onSelect={(value) => updateItem(index, { boxNumber: value || "", itemIds: [] })}
                       placeholder="Выберите коробку..."
                       required
                       data-testid={`select-order-item-box-${index}`}
@@ -387,7 +395,11 @@ export default function SoldItems() {
                       type="number"
                       min={1}
                       value={item.qty}
-                      onChange={(e) => updateItem(index, { qty: Number(e.target.value) || 1 })}
+                      onChange={(e) => {
+                        const nextQty = Math.max(1, Number(e.target.value) || 1);
+                        const nextIds = (item.itemIds || []).slice(0, nextQty);
+                        updateItem(index, { qty: nextQty, itemIds: nextIds });
+                      }}
                       data-testid={`input-order-item-qty-${index}`}
                     />
                   </div>
@@ -412,6 +424,36 @@ export default function SoldItems() {
                   >
                     <i className="fas fa-trash-can"></i>
                   </Button>
+
+                  <div className="md:col-span-5 -mt-1 flex items-center justify-between gap-3">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const smart = String(item.smart || "").trim();
+                        const box = String(item.boxNumber || "").trim();
+                        if (!smart) {
+                          toast({ title: "Выберите SMART", variant: "destructive" });
+                          return;
+                        }
+                        if (!box) {
+                          toast({ title: "Выберите коробку", variant: "destructive" });
+                          return;
+                        }
+                        setPickerIndex(index);
+                        setPickerOpen(true);
+                      }}
+                      disabled={!String(item.smart || "").trim() || !String(item.boxNumber || "").trim()}
+                      data-testid={`button-pick-items-${index}`}
+                    >
+                      Выбрать экземпляры
+                    </Button>
+                    <div className="text-xs text-muted-foreground">
+                      Выбрано: <span className="font-semibold text-foreground">{(item.itemIds || []).length}</span> /{" "}
+                      {item.qty}
+                    </div>
+                  </div>
                 </div>
               ))}
               <div className="text-sm text-muted-foreground">
@@ -611,6 +653,23 @@ export default function SoldItems() {
           </CardContent>
         </Card>
       </div>
+
+      <ItemPickerDialog
+        open={pickerOpen}
+        onOpenChange={(open) => {
+          setPickerOpen(open);
+          if (!open) setPickerIndex(null);
+        }}
+        title="Выбор экземпляров для продажи"
+        smart={pickerIndex !== null ? String(items[pickerIndex]?.smart || "") : ""}
+        boxNumber={pickerIndex !== null ? String(items[pickerIndex]?.boxNumber || "") : ""}
+        qty={pickerIndex !== null ? Number(items[pickerIndex]?.qty || 1) : 1}
+        initialSelectedIds={pickerIndex !== null ? items[pickerIndex]?.itemIds : []}
+        onConfirm={(itemIds) => {
+          if (pickerIndex === null) return;
+          updateItem(pickerIndex, { itemIds });
+        }}
+      />
     </Page>
   );
 }

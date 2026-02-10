@@ -13,7 +13,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
 import { SmartSearch } from "@/components/smart-search";
-import { BoxSelector } from "@/components/box-selector";
+import { BoxSelector, type SmartBoxesApiResponse } from "@/components/box-selector";
 import { insertMovementSchema } from "@shared/schema";
 import type { InsertMovement, Reason } from "@shared/schema";
 import { z } from "zod";
@@ -159,6 +159,36 @@ export default function AddMovement() {
 
   const availableReasons = (reasons || []).filter((r) => r.code !== "return" && r.code !== "sale");
   const selectedReason = form.watch("reason");
+  const selectedSmart = form.watch("smart");
+
+  // Fetch boxes containing the selected SMART (for transfer auto-fill).
+  const smartBoxesQuery = useQuery<SmartBoxesApiResponse>({
+    queryKey: [`/api/stock/${encodeURIComponent(selectedSmart || "")}/boxes`],
+    enabled: selectedReason === "transfer" && Boolean(selectedSmart?.trim()),
+  });
+  const smartBoxes = smartBoxesQuery.data ?? [];
+  const smartBoxesCount = smartBoxes.length;
+
+  // Auto-fill "fromBox" when exactly one box contains the SMART.
+  useEffect(() => {
+    if (selectedReason !== "transfer") return;
+    if (smartBoxesQuery.isLoading || !smartBoxesQuery.data) return;
+
+    if (smartBoxesQuery.data.length === 1) {
+      form.setValue("fromBox", smartBoxesQuery.data[0].boxNumber, { shouldValidate: true });
+    } else {
+      form.setValue("fromBox", null);
+    }
+  }, [smartBoxesQuery.data, smartBoxesQuery.isLoading, selectedReason, form]);
+
+  // Reset box fields when SMART changes during transfer.
+  useEffect(() => {
+    if (selectedReason === "transfer") {
+      form.setValue("fromBox", null);
+      form.setValue("toBox", null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSmart]);
 
   // Clear hidden fields when reason changes.
   useEffect(() => {
@@ -471,14 +501,35 @@ export default function AddMovement() {
                                 Из коробки <span className="text-destructive">*</span>
                               </FormLabel>
                               <FormControl>
-                                <BoxSelector
-                                  value={field.value}
-                                  onSelect={field.onChange}
-                                  required
-                                  mode="bySmart"
-                                  smart={form.watch("smart")}
-                                  data-testid="select-transfer-from-box"
-                                />
+                                {smartBoxesCount === 0 && !smartBoxesQuery.isLoading && selectedSmart?.trim() ? (
+                                  <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                                    Товар не найден ни в одной коробке
+                                  </div>
+                                ) : smartBoxesCount === 1 ? (
+                                  <div className="space-y-1">
+                                    <BoxSelector
+                                      value={field.value}
+                                      onSelect={field.onChange}
+                                      required
+                                      mode="bySmart"
+                                      smart={selectedSmart}
+                                      disabled
+                                      data-testid="select-transfer-from-box"
+                                    />
+                                    <p className="text-xs text-muted-foreground">
+                                      Единственная коробка с этим товаром — выбрана автоматически
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <BoxSelector
+                                    value={field.value}
+                                    onSelect={field.onChange}
+                                    required
+                                    mode="bySmart"
+                                    smart={selectedSmart}
+                                    data-testid="select-transfer-from-box"
+                                  />
+                                )}
                               </FormControl>
                               <FormMessage />
                             </FormItem>

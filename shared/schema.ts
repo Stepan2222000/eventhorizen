@@ -20,6 +20,9 @@ export type DeliveryPayer = z.infer<typeof deliveryPayerSchema>;
 export const returnKindSchema = z.enum(["return", "correction"]);
 export type ReturnKind = z.infer<typeof returnKindSchema>;
 
+export const itemStateSchema = z.enum(["in_stock", "sold", "written_off"]);
+export type ItemState = z.infer<typeof itemStateSchema>;
+
 // SMART reference record (cached on server, read-only from parts DB)
 export type Smart = {
   smart: string;
@@ -133,6 +136,48 @@ export type StockBySmart = {
   articles?: string[];
 };
 
+export type ItemInstance = {
+  id: number;
+  itemCode: string;
+  smart: string;
+  state: ItemState;
+  boxNumber: string | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+  name?: string | null;
+  brand?: string[] | null;
+  description?: string[] | null;
+  articles?: string[];
+};
+
+export type ItemsResponse = {
+  items: ItemInstance[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ItemMedia = {
+  id: number;
+  kind: "photo" | "video";
+  filename: string | null;
+  mime: string;
+  sizeBytes: number;
+  sha256: string | null;
+  chunkSize: number;
+  createdAt: string;
+};
+
+export type ItemDetails = ItemInstance & {
+  purchaseMovementId: number | null;
+  soldMovementId: number | null;
+  writtenOffMovementId: number | null;
+  lastMovementId: number | null;
+  movements: Movement[];
+  media: ItemMedia[];
+};
+
 export type ArticleSearchResult = {
   smart: string;
   articles: string[];
@@ -229,16 +274,27 @@ const nonNegativeMoneyStringSchema = (requiredMessage: string, invalidMessage: s
       message: nonNegativeMessage,
     });
 
-export const orderItemInputSchema = z.object({
-  smart: z.string().min(1, "SMART код обязателен"),
-  qty: z.number().int().positive("Количество должно быть положительным"),
-  salePrice: nonNegativeMoneyStringSchema(
-    "Цена продажи обязательна",
-    "Цена продажи должна быть числом",
-    "Цена продажи не может быть отрицательной"
-  ),
-  boxNumber: z.string().min(1, "Коробка обязательна"),
-});
+export const orderItemInputSchema = z
+  .object({
+    smart: z.string().min(1, "SMART код обязателен"),
+    qty: z.number().int().positive("Количество должно быть положительным"),
+    salePrice: nonNegativeMoneyStringSchema(
+      "Цена продажи обязательна",
+      "Цена продажи должна быть числом",
+      "Цена продажи не может быть отрицательной"
+    ),
+    boxNumber: z.string().min(1, "Коробка обязательна"),
+    itemIds: z.array(z.number().int().positive()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.itemIds && value.itemIds.length !== value.qty) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Количество выбранных экземпляров должно совпадать с qty",
+        path: ["itemIds"],
+      });
+    }
+  });
 
 export type OrderItemInput = z.infer<typeof orderItemInputSchema>;
 
@@ -292,6 +348,7 @@ export type OrderItem = {
   returnedQty: number;
   shippedQty: number;
   createdAt: string;
+  soldItems?: ItemInstance[];
   articles?: string[];
   name?: string | null;
   brand?: string[] | null;
@@ -385,11 +442,22 @@ export const updateShipmentStatusSchema = z.object({
 
 export type UpdateShipmentStatusInput = z.infer<typeof updateShipmentStatusSchema>;
 
-export const createOrderReturnItemSchema = z.object({
-  orderItemId: z.number().int().positive(),
-  qty: z.number().int().positive(),
-  boxNumber: z.string().min(1, "Коробка обязательна"),
-});
+export const createOrderReturnItemSchema = z
+  .object({
+    orderItemId: z.number().int().positive(),
+    qty: z.number().int().positive(),
+    boxNumber: z.string().min(1, "Коробка обязательна"),
+    itemIds: z.array(z.number().int().positive()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.itemIds && value.itemIds.length !== value.qty) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Количество выбранных экземпляров должно совпадать с qty",
+        path: ["itemIds"],
+      });
+    }
+  });
 
 export const createOrderReturnSchema = z
   .object({

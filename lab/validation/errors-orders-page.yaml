@@ -1,0 +1,444 @@
+meta:
+  target: client/src/pages/sold-items.tsx
+  created: 2026-02-10
+  last_updated: 2026-02-10T18:46:38+04:00
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 1: КРИТИЧЕСКИЕ ОШИБКИ (баги, которые ломают логику/данные)
+# ═══════════════════════════════════════════════════════════════
+
+errors:
+  - id: e-ord-001
+    file: client/src/pages/sold-items.tsx
+    category: state-corruption
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - Черновики позиций заказа хранятся в массиве `items`.
+      - Рендер позиций использует `key={index}`.
+      - Внутри строки позиции есть stateful-компоненты (в частности `SmartSearch`), которые:
+        - держат собственный внутренний state,
+        - берут `defaultValue` только при первом монтировании,
+        - НЕ синхронизируются с `item.smart` при сбросе/удалении/сдвиге индексов.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      1) Добавить 2 позиции (A и B), затем удалить первую:
+         - React переиспользует компонент с `key=0`,
+         - UI продолжит показывать SMART от A, а в state уже будет позиция B,
+         - дальше пользователь выберет коробку/qty/экземпляры и создаст заказ с неожиданными данными
+           (или получит ошибку "SMART обязателен", потому что state пустой, а UI выглядит заполненным).
+      2) После успешного создания заказа вызывается `setItems([{ smart: \"\", ... }])`,
+         но `SmartSearch` визуально может не очиститься, потому что не перемонтируется.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - Каждая позиция заказа должна иметь стабильный идентификатор (draft id),
+        а React `key` должен быть этим идентификатором.
+      - `SmartSearch` должен либо быть контролируемым (value/onChange), либо корректно сбрасываться
+        при сбросе черновика (через key/resetToken).
+
+    code_example: |
+      # Проблемный код (ключ по индексу + defaultValue без синхронизации):
+      {items.map((item, index) => (
+        <div key={index}>
+          <SmartSearch defaultValue={item.smart} ... />
+        </div>
+      ))}
+
+      # Как исправить (идея):
+      # 1) Добавить draft id (например crypto.randomUUID()) и хранить/обновлять по нему
+      # 2) Использовать key={item.id}
+      # 3) (опционально) сделать SmartSearch controlled или синхронизировать defaultValue через useEffect
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:37:00+04:00
+        agrees: true
+        note: "Раунд 2: высокий риск рассинхронизации UI/state при удалении/сбросе строк"
+
+    fix: null
+
+  - id: e-ord-002
+    file: client/src/pages/order-details.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - Страница деталей заказа (`/orders/:id`) после операций (обновление статуса отправки/создание возврата)
+        вызывает `invalidateRelated()`.
+      - `invalidateRelated()` инвалидирует query key `["/api/orders"]`.
+      - При этом список заказов (`/orders`) использует query key `["/api/orders?includeArchived=1"]`.
+      - В проекте `staleTime: Infinity` и `refetchOnWindowFocus: false`, поэтому без правильной инвалидации
+        данные могут не обновляться очень долго.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      - Пользователь обновил статус отправки или оформил возврат на странице заказа,
+        вернулся на список заказов и видит старые badge-счётчики (pending/shipped/delivered, returnsCount),
+        потому что query с `?includeArchived=1` не был инвалидирован.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - Инвалидация должна покрывать ВСЕ query keys, начинающиеся с `/api/orders`
+        (как уже сделано на `/orders` через predicate).
+
+    code_example: |
+      # Проблемный код:
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+
+      # Как исправить:
+      # invalidateQueries({ predicate: q => String(q.queryKey?.[0] || \"\").startsWith(\"/api/orders\") })
+      # или инвалидировать оба ключа: \"/api/orders\" и \"/api/orders?includeArchived=1\"
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:37:00+04:00
+        agrees: true
+        note: "Раунд 2: реальный stale-cache баг из-за разных queryKey"
+
+    fix: null
+
+  - id: e-ord-003
+    file: client/src/pages/sold-items.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - На странице `/orders` есть несколько обязательных для работы запросов:
+        `/api/customers`, `/api/shipping-methods`, `/api/movements`.
+      - Для них в UI почти не обрабатываются состояния `isError`/`error`:
+        в случае 500/сети пользователь увидит пустые селекты/списки и сообщения вроде
+        "Выберите клиента/способ доставки", которые маскируют реальную причину.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      - При проблемах с API (что в реальности случается) страница выглядит как "просто пустая",
+        а пользователь не понимает, что это ошибка загрузки данных.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - Для критичных запросов показывать явную ошибку (inline или toast) и/или disable формы
+        до успешной загрузки.
+
+    code_example: |
+      # Проблемный паттерн:
+      const { data: shippingMethods = [] } = useQuery<ShippingMethod[]>({ queryKey: [\"/api/shipping-methods\"] });
+      # дальше UI не различает \"пусто\" и \"ошибка\"
+
+      # Как исправить:
+      # использовать isLoading/isError и показывать сообщение/disable
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:37:00+04:00
+        agrees: true
+        note: "Раунд 2: ошибки загрузки маскируются под пустые данные"
+
+    fix: null
+
+  - id: e-ord-004
+    file: client/src/components/smart-search.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - При ошибке поиска (500/сеть) `SmartSearch` ловит исключение и:
+        - пишет в console,
+        - молча закрывает dropdown,
+        - не показывает пользователю, что произошла ошибка.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      - Пользователь не сможет найти SMART и будет думать, что "ничего не найдено",
+        хотя реально упал API.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - Показывать явную ошибку (toast/inline) отличимую от "нет результатов".
+
+    code_example: |
+      # Проблемный код:
+      } catch (err: any) {
+        if (err?.name === \"AbortError\") return;
+        console.error(\"SmartSearch error:\", err);
+        setResults([]);
+        setIsOpen(false);
+      }
+
+      # Как исправить:
+      # сохранить error state и рендерить сообщение в dropdown,
+      # или дергать toast при ошибке.
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:37:00+04:00
+        agrees: true
+        note: "Раунд 2: ошибка API неотличима от пустого результата"
+
+    fix: null
+
+  - id: e-ord-005
+    file: client/src/pages/sold-items.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - `ItemPickerDialog` читает доступные экземпляры через `/api/items` и использует React Query cache
+        с `staleTime: Infinity` (глобально).
+      - После создания заказа на `/orders` вызывается `invalidateAfterOrderChanges()`, но там нет инвалидации
+        ключей, начинающихся с `/api/items`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      - Пользователь открывает выбор экземпляров, видит список in_stock.
+      - Потом в другом заказе/окне эти экземпляры продаются (или этот же пользователь оформляет продажу),
+        но кэш `/api/items` остаётся "вечным".
+      - При повторном открытии диалога пользователь видит устаревший список и выбирает экземпляры,
+        которые уже не `in_stock` -> backend отклоняет создание заказа (ошибка про состояние/недостаток).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - После операций, которые меняют `inventory.items` (продажа/возврат/списание/перемещение),
+        инвалидировать `/api/items*` кэш, чтобы выбор экземпляров всегда был актуальным.
+
+    code_example: |
+      # Проблемный код:
+      const invalidateAfterOrderChanges = () => {
+        queryClient.invalidateQueries({ queryKey: [\"/api/movements\"] });
+        queryClient.invalidateQueries({ queryKey: [\"/api/stock\"] });
+        // ... но нет invalidateQueries для /api/items
+      }
+
+      # Как исправить:
+      # queryClient.invalidateQueries({ queryKey: [\"/api/items\"] });
+      # (это покроет и ключи вида [\"/api/items\", smart, box, q])
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:42:29+04:00
+        agrees: true
+        note: "Раунд 3: staleTime=Infinity + нет инвалидации /api/items -> устаревший выбор экземпляров"
+
+    fix: null
+
+  - id: e-ord-006
+    file: client/src/pages/order-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      - На странице `/orders/:id` после изменения статуса отправки/создания возврата вызывается `invalidateRelated()`.
+      - `invalidateRelated()` инвалидирует много сущностей (`/api/orders*`, `/api/movements`, `/api/stock*`, ...),
+        но не инвалидирует `/api/items*`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      - После возврата экземпляры меняют состояние на `in_stock` и получают новую коробку.
+      - Любые экраны/диалоги, использующие `/api/items` (например `ItemPickerDialog`), при `staleTime: Infinity`
+        могут продолжать показывать устаревшие состояния экземпляров, пока пользователь не сделает hard refresh.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      - Инвалидация после операций, изменяющих таблицу `inventory.items`, должна включать `/api/items*`.
+
+    code_example: |
+      # Как исправить (идея):
+      # добавить в invalidateRelated():
+      # queryClient.invalidateQueries({ queryKey: [\"/api/items\"] });
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:44:54+04:00
+        agrees: true
+        note: "Раунд 3: возвраты меняют items, но /api/items кэш не сбрасывается"
+
+    fix: null
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 2: АРХИТЕКТУРНЫЕ ПРОБЛЕМЫ (не баги, но можно лучше)
+# ═══════════════════════════════════════════════════════════════
+
+improvements:
+  - id: i-ord-001
+    file: client/src/pages/sold-items.tsx
+    category: naming
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - Файл называется `sold-items.tsx`, но это основной экран `/orders` (создание заказа + список заказов).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Усложняет навигацию по проекту и поиск кода по фиче.
+      - Увеличивает шанс правок "не там", особенно при рефакторингах.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Переименовать файл/компонент под домен: например `orders.tsx` / `OrdersPage`.
+      - Обновить импорты в роутере и сайдбаре.
+
+    code_example: |
+      # Где сейчас привязка:
+      # client/src/App.tsx: import SoldItems from "@/pages/sold-items";
+      # client/src/App.tsx: <Route path="/orders" component={SoldItems} />
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: улучшение читаемости/сопровождения"
+
+    fix: null
+
+  - id: i-ord-002
+    file: client/src/pages/sold-items.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - `/orders` делает `GET /api/movements` (все движения), чтобы показать блок
+        "Старые продажи без заказа" и потом берёт только первые 20.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - На больших базах это будет заметно тормозить и грузить сеть/сервер.
+      - Параллельно страница уже тянет заказы/клиентов/способы доставки.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Сделать лёгкий endpoint под кейс (например `GET /api/legacy-sales?limit=20` или фильтры на `/api/movements`).
+      - Либо лениво загружать этот блок по кнопке "Показать" (не блокируя основной сценарий "оформить заказ").
+
+    code_example: |
+      # Проблемный паттерн:
+      # useQuery({ queryKey: ["/api/movements"] }) -> movements.filter(...) -> slice(0, 20)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: производительность"
+
+    fix: null
+
+  - id: i-ord-003
+    file: client/src/pages/sold-items.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - Логика инвалидации кэшей дублируется минимум в двух местах:
+        - `/orders` → `invalidateAfterOrderChanges()`
+        - `/orders/:id` → `invalidateRelated()`
+      - Из-за дублирования уже появился рассинхрон (см. ошибки про `/api/orders?includeArchived=1` и `/api/items`).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Любая новая сущность для сброса (или изменение queryKey) требует синхронных правок в нескольких файлах.
+      - Легко допустить "тихие" баги со staleTime=Infinity.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Вынести общую функцию инвалидации (например `invalidateOrdersFeature(queryClient, opts)`),
+        и вызывать её из обоих экранов.
+      - Добавить в неё `/api/items` и predicate для `/api/orders*`.
+
+    code_example: |
+      # Пример идеи:
+      # export function invalidateOrdersFeature(qc: QueryClient, orderId?: number) { ... }
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: DRY + уменьшение риска будущих багов"
+
+    fix: null
+
+  - id: i-ord-004
+    file: client/src/components/item-picker-dialog.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - `ItemPickerDialog` всегда запрашивает максимум 200 экземпляров (`limit=200`) без пагинации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Если в коробке >200 экземпляров, нужный item может не попасть в выдачу при пустом поиске.
+      - Это потенциально блокирует сценарий "выбрать конкретные экземпляры", даже если они есть.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Добавить пагинацию/инфинит-скролл.
+      - Либо явно требовать поиска при `total > limit` и показывать подсказку.
+
+    code_example: |
+      # Сейчас:
+      # fetchItems({ ..., limit: "200", offset: "0", q })
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: UX/масштабирование"
+
+    fix: null
+
+  - id: i-ord-005
+    file: shared/schema.ts
+    category: spec-mismatch
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - `shipmentInputSchema` разрешает `deliveryPayer: null/undefined` при `deliveryPrice > 0`.
+      - Backend (`createOrder`) требует "кто платит", если стоимость доставки > 0.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Контракт между фронтом и бэком становится неявным.
+      - Любой другой клиент (или будущий рефактор фронта) может начать посылать payload,
+        который валиден по shared schema, но будет стабильно падать на API.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Добавить `superRefine` в `shipmentInputSchema`: если `Number(deliveryPrice) > 0`, то `deliveryPayer` обязателен.
+
+    code_example: |
+      # Идея:
+      # shipmentInputSchema.superRefine((v, ctx) => { ... })
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: синхронизация контракта"
+
+    fix: null
+
+  - id: i-ord-006
+    file: client/src/components/smart-search.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      - Dropdown закрывается при `data.length === 0`, поэтому пользователь не видит состояние "Ничего не найдено".
+      - При ошибке API dropdown тоже закрывается, и это выглядит как "нет результатов".
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Пользователь не отличает "пусто" от "ошибка", и может тратить время на повторные попытки.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Держать dropdown открытым при непустом query и показывать:
+        - "Ничего не найдено" при пустом результате
+        - "Ошибка поиска" при ошибке запроса
+      - Плюс опционально добавить retry-кнопку.
+
+    code_example: |
+      # Сейчас:
+      # setIsOpen(data.length > 0)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:46:38+04:00
+        note: "Раунд 4: UX + диагностируемость"
+
+    fix: null

@@ -1,0 +1,399 @@
+meta:
+  target: "dashboard (client/src/pages/dashboard.tsx + /api/dashboard/stats, /api/stock, /api/movements)"
+  created: 2026-02-10
+  last_updated: 2026-02-10T14:51:51Z
+
+errors:
+  - id: e-dash-001
+    file: py_backend/storage.py
+    category: resource-leak
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Главная страница грузит движения через `GET /api/movements`, а затем на клиенте делает `.slice(0, 5)`.
+      Но серверный `getMovements()` возвращает ВСЮ историю движений без лимита.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При росте базы (сотни/тысячи движений) главная начнет:
+      - тянуть большой JSON,
+      - долго рендериться/фризить UI,
+      - создавать лишнюю нагрузку на БД и сеть,
+      - потенциально упираться в лимиты reverse-proxy/браузера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для главной нужны только последние N движений (например, 5-20).
+      Сервер должен поддерживать лимит/пагинацию (query param `limit`, `offset`)
+      или отдельный endpoint `GET /api/movements/recent?limit=5`.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      const { data: movements } = useQuery({ queryKey: ["/api/movements"] });
+      ...
+      (movements as Movement[] || []).slice(0, 5)
+
+      # py_backend/storage.py (getMovements)
+      SELECT *
+      FROM inventory.movements
+      ORDER BY created_at DESC
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:41:33Z
+        agrees: true
+        note: "Раунд 2: главный экран тянет всю историю движений, хотя показывает только 5"
+
+    fix: null
+
+  - id: e-dash-002
+    file: py_backend/storage.py
+    category: resource-leak
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Главная страница грузит остатки через `GET /api/stock`, а затем на клиенте делает `.slice(0, 5)`.
+      Серверный `getStockLevels()` возвращает все SMART-коды со склада и дополнительно подтягивает
+      содержимое коробок (`inventory.box_contents`) для КАЖДОГО SMART.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При росте справочника/склада главная начнет тянуть тяжелый ответ, хотя в превью нужны 5 строк.
+      Это дает:
+      - лишние запросы/объем данных,
+      - заметные задержки загрузки,
+      - риск таймаутов при большом количестве строк/коробок.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для главной: endpoint должен возвращать только топ-N (или последние активные) позиции
+      и только поля, нужные для превью (без boxes).
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      const { data: stockLevels } = useQuery({ queryKey: ["/api/stock"] });
+      ...
+      (stockLevels as StockLevel[] || []).slice(0, 5)
+
+      # py_backend/storage.py (getStockLevels)
+      SELECT smart, total_qty
+      FROM inventory.stock
+      ORDER BY smart
+      ...
+      SELECT smart, box_number, qty
+      FROM inventory.box_contents
+      WHERE smart = ANY($1)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:41:33Z
+        agrees: true
+        note: "Раунд 2: для превью на главной не нужен полный /api/stock (и тем более boxes)"
+
+    fix: null
+
+  - id: e-dash-003
+    file: client/src/pages/dashboard.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Блок превью остатков подписан как "Топ позиций на складе",
+      но фактически показывает первые 5 строк из `/api/stock` в том порядке, который отдаёт сервер.
+      На сервере `getStockLevels()` сортирует по `smart` (алфавитно), а не по количеству.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь видит не "топ" (по наличию/обороту), а произвольные/алфавитные позиции.
+      Это вводит в заблуждение и снижает ценность главного экрана.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Либо:
+      - действительно показывать "топ" (например, `ORDER BY total_qty DESC`),
+      - либо переименовать блок ("Первые позиции" / "Превью остатков") и явно описать порядок.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      <CardDescription>Топ позиций на складе</CardDescription>
+      ...
+      (stockLevels as StockLevel[] || []).slice(0, 5)
+
+      # py_backend/storage.py
+      FROM inventory.stock
+      ORDER BY smart
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:41:33Z
+        agrees: true
+        note: "Раунд 2: текст 'Топ' не соответствует фактической сортировке"
+
+    fix: null
+
+  - id: e-dash-004
+    file: client/src/pages/dashboard.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При ошибке запроса (500/timeout/нет связи) React Query выставит `error`,
+      но Dashboard не отображает ошибку: карточки статистики показывают 0, списки становятся пустыми.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь видит "0 продаж/0 движений/нет остатков" и воспринимает это как реальные данные,
+      хотя на самом деле это сбой загрузки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно обрабатывать `isError/error` для stats/stock/movements:
+      - показывать понятный state "Ошибка загрузки" (и/или кнопку retry),
+      - не маскировать ошибку под валидные нули.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      const { data: stats, isLoading: statsLoading } = useQuery({ queryKey: ["/api/dashboard/stats"] });
+      ...
+      {statsLoading ? <Skeleton .../> : <h3> {stats?.inStock || 0} </h3>}
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:41:33Z
+        agrees: true
+        note: "Раунд 2: ошибки API сейчас визуально неотличимы от 'нулевых' данных"
+
+    fix: null
+
+  - id: e-dash-005
+    file: client/src/components/sidebar.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В сайдбаре отображается "Статус БД: Подключено" и зелёный индикатор,
+      но это статичная верстка без проверки доступности API/БД.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При падении backend/БД UI продолжит показывать "Подключено",
+      что будет вводить в заблуждение (особенно на главном экране, где критичны данные).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Либо:
+      - сделать реальную проверку (health endpoint / ping) и отображать `Подключено/Нет связи`,
+      - либо убрать текст про подключение, если статуса фактически нет.
+
+    code_example: |
+      # client/src/components/sidebar.tsx
+      <div className=\"text-[11px] leading-4 text-muted-foreground\">Статус БД</div>
+      <div className=\"truncate font-mono text-xs font-medium text-foreground\">Подключено</div>
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:41:33Z
+        agrees: true
+        note: "Раунд 2: статус подключения рисуется всегда 'ok'"
+
+    fix: null
+
+  - id: e-dash-006
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Метрика `salesToday` на дашборде считается как `COUNT(*)` по строкам движений с `reason = 'sale'`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В системе продажа по заказу может быть одной строкой движения с `qty_delta = -N` (N > 1).
+      Тогда:
+      - фактически продано N единиц,
+      - но дашборд покажет `1` ("одна продажа сегодня").
+      Для пользователя "Продаж сегодня" чаще читается как количество проданных единиц, а не число строк/операций.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Либо:
+      - переименовать метрику в UI (например, "Продаж (операций) сегодня"),
+      - либо считать количество проданных единиц: `SUM(-qty_delta)` для `reason='sale'` за сегодня.
+
+    code_example: |
+      # py_backend/routes.py (dashboard_stats)
+      sales_today AS (
+        SELECT COUNT(*)::text as sales_today
+        FROM inventory.movements
+        WHERE created_at::date = CURRENT_DATE AND reason = 'sale'
+      )
+
+      # py_backend/storage.py (createOrder): sale movement может иметь qty > 1
+      VALUES (..., -toInt(item["qty"]), 'sale', ...)
+
+    found_count: 2
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:39Z
+        agrees: true
+        note: "Раунд 3: `COUNT(*)` для продаж может не совпадать с количеством проданных единиц"
+      - agent: validator-1
+        timestamp: 2026-02-10T14:51:51Z
+        agrees: true
+        note: |
+          Раунд 5: перепроверка — sale movement действительно создаётся с `qty_delta = -qty` (qty может быть > 1).
+          Если метрика должна отражать количество операций/позиций, достаточно переименовать.
+          Если должна отражать проданные единицы — нужен `SUM(-qty_delta)`.
+
+    fix: null
+
+improvements:
+  - id: i-dash-001
+    file: client/src/pages/dashboard.tsx
+    category: naming
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В блоке "Последние движения" причина операции показывается как сырой код (`purchase`, `sale`, `adjust`, ...).
+      На русском UI это выглядит как тех.деталь, а не понятная метка.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Пользователю сложнее читать ленту операций.
+      - В системе уже есть словарь причин с русскими названиями.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Отображать title из словаря причин (например, `Покупка/Продажа/Корректировка/Перемещение`),
+      оставив код только при необходимости (например, в tooltip).
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      <Badge ...>
+        {movement.reason}
+      </Badge>
+
+      # shared/schema.ts
+      export const REASONS: Reason[] = [
+        { code: "purchase", title: "Покупка" },
+        ...
+      ];
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:39Z
+        note: "Раунд 3: улучшение читаемости, без изменения бизнес-логики"
+
+    fix: null
+
+  - id: i-dash-002
+    file: client/src/components/sidebar.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Активный пункт меню определяется строгим равенством `location === item.href`.
+      На вложенных маршрутах (например, `/stock/:smart`, `/orders/:id`) ни один пункт меню не подсвечивается.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Пользователь теряет контекст "где я нахожусь" при работе с деталями (что встречается постоянно).
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Определять активность по префиксу/матчингу маршрута:
+      - `/stock` активен для `/stock` и `/stock/:smart`
+      - `/orders` активен для `/orders` и `/orders/:id`
+      и т.д.
+
+    code_example: |
+      # client/src/components/sidebar.tsx
+      const isActive = location === item.href;
+
+      # client/src/App.tsx
+      <Route path=\"/stock/:smart\" component={StockDetails} />
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:39Z
+        note: "Раунд 3: UX-баг навигации на вложенных страницах"
+
+    fix: null
+
+  - id: i-dash-003
+    file: client/src/lib/queryClient.ts
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Глобально задан `staleTime: Infinity` и `refetchOnWindowFocus: false`.
+      Для дашборда с метриками "Сегодня" это означает: данные могут оставаться устаревшими,
+      если их никто не инвалидирует (например, изменения произошли в другой вкладке/устройстве).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Главная страница выглядит как "текущая сводка", но может показывать старые цифры без явного сигнала.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Локально переопределить настройки именно для `/api/dashboard/stats` (и, возможно, превью списков):
+      - `staleTime` 30-60 секунд,
+      - `refetchOnWindowFocus: true`,
+      - или `refetchInterval` (например, 60с) только на дашборде.
+
+    code_example: |
+      # client/src/lib/queryClient.ts
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:39Z
+        note: "Раунд 3: не баг в коде, но риск устаревших 'сегодняшних' метрик"
+
+    fix: null
+
+  - id: i-dash-004
+    file: client/src/pages/dashboard.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика отображения причины движения (reason -> variant/title) и форматирования даты/времени
+      реализована и поддерживается в нескольких местах (дашборд, история движений и т.д.).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Любое изменение (новый reason, новый формат дат) нужно синхронно править в нескольких файлах.
+      - Легко получить расхождения (например, где-то `transfer` обработан, а где-то нет).
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести в общие утилиты:
+      - `formatMovementReason(reason)` / `getReasonBadgeVariant(reason)`
+      - `formatDateTime(dateString)`
+      и переиспользовать на всех страницах.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      const getReasonVariant = (reason: string) => { ... }
+      ...
+      new Date(movement.createdAt).toLocaleString()
+
+      # client/src/pages/movement-history.tsx
+      const getReasonVariant = (reason: string) => { ... }
+      const formatDateTime = (dateString: string) => { ... }
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:50:46Z
+        note: "Раунд 4: DRY для reason/date formatting"
+
+    fix: null

@@ -11,6 +11,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Page } from "@/components/page";
 import { BoxSelector } from "@/components/box-selector";
+import { Checkbox } from "@/components/ui/checkbox";
 import type {
   DeliveryPayer,
   OrderDetails,
@@ -57,7 +58,7 @@ export default function OrderDetailsPage() {
   const [returnPayer, setReturnPayer] = useState<DeliveryPayer>("buyer");
   const [returnShippingMethodId, setReturnShippingMethodId] = useState<string>("");
   const [returnTrackNumber, setReturnTrackNumber] = useState("");
-  const [returnQtyByItem, setReturnQtyByItem] = useState<Record<number, number>>({});
+  const [returnItemIdsByItem, setReturnItemIdsByItem] = useState<Record<number, number[]>>({});
   const [returnBoxByItem, setReturnBoxByItem] = useState<Record<number, string>>({});
 
   const { data: order, isLoading } = useQuery<OrderDetails>({
@@ -76,13 +77,13 @@ export default function OrderDetailsPage() {
       next[shipment.id] = shipment.status;
     }
     setShipmentStatusDraft(next);
-    const initialReturnQty: Record<number, number> = {};
+    const initialReturnIds: Record<number, number[]> = {};
     const initialReturnBoxes: Record<number, string> = {};
     for (const item of order.items) {
-      initialReturnQty[item.id] = 0;
+      initialReturnIds[item.id] = [];
       initialReturnBoxes[item.id] = String(item.boxNumber || "").trim();
     }
-    setReturnQtyByItem(initialReturnQty);
+    setReturnItemIdsByItem(initialReturnIds);
     setReturnBoxByItem(initialReturnBoxes);
   }, [order]);
 
@@ -135,7 +136,8 @@ export default function OrderDetailsPage() {
       const items = order.items
         .map((item) => ({
           orderItemId: item.id,
-          qty: Number(returnQtyByItem[item.id] || 0),
+          itemIds: Array.isArray(returnItemIdsByItem[item.id]) ? returnItemIdsByItem[item.id] : [],
+          qty: Array.isArray(returnItemIdsByItem[item.id]) ? returnItemIdsByItem[item.id].length : 0,
           maxQty: Math.max(0, item.qty - item.returnedQty),
           boxNumber: String(returnBoxByItem[item.id] || "").trim(),
         }))
@@ -151,6 +153,9 @@ export default function OrderDetailsPage() {
         if (!item.boxNumber) {
           throw new Error(`Выберите коробку для возврата позиции #${item.orderItemId}`);
         }
+        if (!item.itemIds || item.itemIds.length !== item.qty) {
+          throw new Error(`Для позиции #${item.orderItemId} нужно выбрать конкретные экземпляры (itemIds)`);
+        }
       }
 
       const payload: Record<string, unknown> = {
@@ -160,7 +165,12 @@ export default function OrderDetailsPage() {
         returnPayer: Number(returnPrice || 0) > 0 ? returnPayer : null,
         shippingMethodId: returnShippingMethodId ? Number(returnShippingMethodId) : null,
         trackNumber: returnTrackNumber.trim() || null,
-        items: items.map((item) => ({ orderItemId: item.orderItemId, qty: item.qty, boxNumber: item.boxNumber })),
+        items: items.map((item) => ({
+          orderItemId: item.orderItemId,
+          qty: item.qty,
+          boxNumber: item.boxNumber,
+          itemIds: item.itemIds,
+        })),
       };
 
       const response = await apiRequest("POST", `/api/orders/${order.id}/returns`, payload);
@@ -174,9 +184,9 @@ export default function OrderDetailsPage() {
       setReturnPayer("buyer");
       setReturnShippingMethodId("");
       setReturnTrackNumber("");
-      setReturnQtyByItem((prev) => {
-        const reset: Record<number, number> = {};
-        for (const key of Object.keys(prev)) reset[Number(key)] = 0;
+      setReturnItemIdsByItem((prev) => {
+        const reset: Record<number, number[]> = {};
+        for (const key of Object.keys(prev)) reset[Number(key)] = [];
         return reset;
       });
     },
@@ -190,8 +200,8 @@ export default function OrderDetailsPage() {
   });
 
   const totalReturnQty = useMemo(
-    () => Object.values(returnQtyByItem).reduce((sum, qty) => sum + Number(qty || 0), 0),
-    [returnQtyByItem]
+    () => Object.values(returnItemIdsByItem).reduce((sum, ids) => sum + (Array.isArray(ids) ? ids.length : 0), 0),
+    [returnItemIdsByItem]
   );
 
   if (!Number.isFinite(orderId)) {
@@ -262,6 +272,9 @@ export default function OrderDetailsPage() {
             <div className="space-y-2">
               {order.items.map((item) => {
                 const maxReturn = Math.max(0, item.qty - item.returnedQty);
+                const soldItems = item.soldItems || [];
+                const availableItems = soldItems.filter((i) => i.state === "sold");
+                const selectedIds = new Set<number>((returnItemIdsByItem[item.id] || []).map(Number));
                 return (
                   <div key={item.id} className="rounded-md border p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -282,23 +295,7 @@ export default function OrderDetailsPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-[180px_260px_1fr] gap-3 items-start">
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-1">Количество к возврату</p>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={maxReturn}
-                          value={returnQtyByItem[item.id] ?? 0}
-                          onChange={(e) =>
-                            setReturnQtyByItem((prev) => ({
-                              ...prev,
-                              [item.id]: Math.max(0, Math.min(maxReturn, Number(e.target.value) || 0)),
-                            }))
-                          }
-                          data-testid={`input-return-qty-${item.id}`}
-                        />
-                      </div>
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 items-start">
                       <div>
                         <p className="text-xs text-muted-foreground mb-1">Куда положить</p>
                         <BoxSelector
@@ -312,11 +309,96 @@ export default function OrderDetailsPage() {
                           }
                           placeholder="Выберите коробку..."
                           disabled={maxReturn === 0}
-                          required={Number(returnQtyByItem[item.id] || 0) > 0}
+                          required={(returnItemIdsByItem[item.id] || []).length > 0}
                           data-testid={`select-return-box-${item.id}`}
                         />
+                        <p className="text-xs text-muted-foreground mt-2">
+                          Выбрано к возврату:{" "}
+                          <span className="font-semibold text-foreground">
+                            {(returnItemIdsByItem[item.id] || []).length}
+                          </span>{" "}
+                          / {maxReturn}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground">Можно вернуть максимум: {maxReturn} шт</p>
+
+                      <div>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs text-muted-foreground">
+                            Экземпляры (можно вернуть максимум: {maxReturn} шт)
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                const ids = availableItems.slice(0, maxReturn).map((i) => i.id);
+                                setReturnItemIdsByItem((prev) => ({ ...prev, [item.id]: ids }));
+                              }}
+                              disabled={maxReturn === 0 || availableItems.length === 0}
+                              data-testid={`button-return-select-all-${item.id}`}
+                            >
+                              Выбрать все
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setReturnItemIdsByItem((prev) => ({ ...prev, [item.id]: [] }));
+                              }}
+                              disabled={(returnItemIdsByItem[item.id] || []).length === 0}
+                              data-testid={`button-return-clear-${item.id}`}
+                            >
+                              Очистить
+                            </Button>
+                          </div>
+                        </div>
+
+                        {soldItems.length === 0 ? (
+                          <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                            Этот заказ создан без списка экземпляров (items). Возврат нельзя оформить безопасно.
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {soldItems.map((sold) => {
+                              const disabled = maxReturn === 0 || sold.state !== "sold";
+                              const checked = selectedIds.has(Number(sold.id));
+                              return (
+                                <button
+                                  key={sold.id}
+                                  type="button"
+                                  className={[
+                                    "inline-flex items-center gap-2 rounded-md border px-2 py-1 text-xs",
+                                    disabled ? "opacity-60 cursor-not-allowed" : "hover:bg-muted/40",
+                                  ].join(" ")}
+                                  onClick={() => {
+                                    if (disabled) return;
+                                    const idNum = Number(sold.id);
+                                    setReturnItemIdsByItem((prev) => {
+                                      const current = new Set<number>((prev[item.id] || []).map(Number));
+                                      if (current.has(idNum)) {
+                                        current.delete(idNum);
+                                      } else {
+                                        if (current.size >= maxReturn) return prev;
+                                        current.add(idNum);
+                                      }
+                                      return { ...prev, [item.id]: Array.from(current) };
+                                    });
+                                  }}
+                                  data-testid={`button-toggle-return-item-${item.id}-${sold.id}`}
+                                >
+                                  <Checkbox checked={checked} disabled={disabled} className="pointer-events-none" />
+                                  <span className="font-mono font-semibold">{sold.itemCode}</span>
+                                  {sold.state !== "sold" ? (
+                                    <span className="text-muted-foreground">(на складе)</span>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

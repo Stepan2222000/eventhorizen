@@ -1,0 +1,211 @@
+meta:
+  target: movement-history
+  scope:
+    - client/src/pages/movement-history.tsx
+    - client/src/lib/queryClient.ts
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - py_backend/normalization.py
+    - py_backend/inventory_schema.py
+    - shared/schema.ts
+    - lab/box-system-spec.md
+    - lab/item-system-as-is.md
+    - lab/data-storage.md
+  created: 2026-02-10
+  last_updated: 2026-02-10T18:47:24+04:00
+  agent: validator-1
+
+errors:
+  - id: e-mh-001
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      История движений берётся из БД сортировкой только по `created_at DESC`.
+
+      Примеры:
+      - `getMovements()` → `SELECT * FROM inventory.movements ORDER BY created_at DESC`
+      - `getBoxDetails().history` → `... ORDER BY created_at DESC LIMIT ...`
+
+      При этом несколько строк часто создаются в ОДНОЙ транзакции с `NOW()`,
+      а в PostgreSQL `NOW()` = timestamp начала транзакции (одинаковый для всех INSERT внутри транзакции).
+      Это особенно часто для:
+      - `transfer` (всегда 2 строки в одной транзакции)
+      - продаж по заказу (несколько `sale` строк в одной транзакции)
+      - возврат по заказу (несколько `return` строк в одной транзакции)
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если `created_at` совпал, порядок строк становится недетерминированным:
+      одна и та же пара transfer (+qty/-qty) может отображаться в разном порядке между запросами.
+      Это заметно на UI “История движений” и “История операций” коробки: строки будут "прыгать".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Добавить вторичный стабильный ключ сортировки (например, `id DESC`) в SQL.
+      Тогда при равном `created_at` порядок всегда одинаковый.
+
+    code_example: |
+      # Проблемный код (py_backend/storage.py):
+      # getMovements():
+      SELECT *
+      FROM inventory.movements
+      ORDER BY created_at DESC
+
+      # getBoxDetails() history:
+      SELECT *
+      FROM inventory.movements
+      WHERE box_number = $1
+      ORDER BY created_at DESC
+      LIMIT $2
+
+      # transferBetweenBoxesAttempt() (оба INSERT используют NOW() внутри одной транзакции):
+      VALUES (..., NOW())
+
+      # Как исправить (пример):
+      ORDER BY created_at DESC, id DESC
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:29:30+04:00
+        agrees: true
+        note: "Раунд 2: нестабильный порядок при одинаковом created_at (transfer/заказы/возвраты)."
+
+    fix: null
+
+  - id: e-mh-002
+    file: client/src/pages/movement-history.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница истории движений читает `isLoading`, но не учитывает `isError/error`.
+      Если запрос /api/movements падает (сеть/500/неавторизован), UI показывает "Нет записанных движений"
+      и выглядит как "пустая история", хотя это ошибка загрузки.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь делает неверные выводы (например, думает что движений нет),
+      вместо того чтобы увидеть сообщение об ошибке и повторить попытку.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Обрабатывать состояние ошибки (`isError`/`error`) и явно показывать ошибку загрузки,
+      плюс дать кнопку/ссылку повторить (`refetch()`).
+
+    code_example: |
+      // client/src/pages/movement-history.tsx
+      const { data: movements, isLoading } = useQuery({ ... });
+
+      // Ошибка: нет ветки isError/error, а movements может быть undefined.
+      const filteredMovements = (movements as Movement[] || []).filter(...)
+
+      // В рендере при isLoading=false и filteredMovements.length===0 будет "Нет записанных движений".
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:29:30+04:00
+        agrees: true
+        note: "Раунд 2: ошибка загрузки маскируется под пустой список."
+
+    fix: null
+
+improvements:
+  - id: i-mh-001
+    file: client/src/pages/movement-history.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      /api/movements возвращает полный список, а фильтрация делается целиком на клиенте.
+      При росте таблицы movements страница начнёт заметно тормозить:
+      - большой JSON на сеть/парсинг
+      - фильтрация по строкам для каждой перерисовки
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Реалистичный сценарий: через несколько месяцев в movements будет 10k+ строк,
+      и “История движений” начнёт подвисать при вводе фильтра/открытии.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить пагинацию/лимит/серверные фильтры (q, boxNumber, smart, date range),
+      и на UI показывать страницу результатов (например, 100-200 строк).
+
+    code_example: |
+      // py_backend/storage.py
+      SELECT * FROM inventory.movements ORDER BY created_at DESC
+
+      // client/src/pages/movement-history.tsx
+      const filteredMovements = (movements as Movement[] || []).filter(...)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:29:30+04:00
+        note: "Раунд 4: масштабируемость истории."
+
+    fix: null
+
+  - id: i-mh-002
+    file: client/src/pages/movement-history.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      qtyDelta=0 (например, миграционная запись reconcile) отображается как "+0" зелёным цветом.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      0 не является ни приходом, ни расходом, но визуально выглядит как "успешный приход".
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Для 0 показывать нейтральный стиль (без '+', muted-цвет), либо отдельный бейдж "0".
+
+    code_example: |
+      // client/src/pages/movement-history.tsx
+      movement.qtyDelta >= 0 ? 'text-success' : 'text-destructive'
+      movement.qtyDelta >= 0 ? '+' : ''
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:29:30+04:00
+        note: "Раунд 4: reconcile-строки из миграции выглядят как +0."
+
+    fix: null
+
+  - id: i-mh-003
+    file: client/src/pages/movement-history.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Для transfer стрелка/направление хранится в `note` (например, `→ K-7 · user note`),
+      и в UI она показывается и в колонке "Коробка", и дублируется в колонке "Примечание".
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - визуальный шум (дублирование одной и той же информации)
+      - сложнее искать/читать пользовательское примечание (оно смешано с системной стрелкой)
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      На UI: в колонке "Примечание" для transfer показывать только пользовательскую часть
+      (после разделителя `·`), а стрелку оставить только в колонке "Коробка".
+
+    code_example: |
+      // client/src/pages/movement-history.tsx
+      movement.reason === "transfer" && movement.note
+        ? `${movement.boxNumber || "—"} ${movement.note.split("·")[0].trim()}`
+        : (movement.boxNumber || "—")
+
+      // При этом колонка "Примечание" сейчас выводит movement.note целиком.
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:29:30+04:00
+        note: "Раунд 4: UX улучшение для transfer заметок."
+
+    fix: null

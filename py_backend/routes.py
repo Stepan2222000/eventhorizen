@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import io
+import re
 from typing import Any
 
-from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openpyxl import Workbook, load_workbook
 
 from py_backend.normalization import normalize_article
@@ -12,6 +14,48 @@ from py_backend.storage import DatabaseStorage, InsufficientBoxStockError, Insuf
 from py_backend.types import SaleStatus
 
 MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_CHUNK_SIZE = 1024 * 1024
+
+# Example: "bytes=0-99" / "bytes=100-" / "bytes=-500"
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+
+def _parse_range_header(range_header: str, size_bytes: int) -> tuple[int, int] | None:
+    if size_bytes <= 0:
+        return None
+    header = (range_header or "").strip()
+    if not header:
+        return None
+    m = _RANGE_RE.match(header)
+    if not m:
+        return None
+
+    start_s, end_s = m.group(1), m.group(2)
+    if start_s == "" and end_s == "":
+        return None
+
+    if start_s == "":
+        # Suffix range: last N bytes
+        suffix = int(end_s)
+        if suffix <= 0:
+            return None
+        start = max(0, size_bytes - suffix)
+        end = size_bytes - 1
+        return (start, end)
+
+    start = int(start_s)
+    if start < 0:
+        return None
+    if end_s == "":
+        end = size_bytes - 1
+    else:
+        end = int(end_s)
+        if end < start:
+            return None
+        end = min(end, size_bytes - 1)
+    if start >= size_bytes:
+        return None
+    return (start, end)
 
 
 def parse_csv_text(text: str) -> list[list[str]]:
@@ -435,6 +479,285 @@ def register_routes(app: FastAPI) -> None:
         except Exception:
             return JSONResponse(status_code=500, content={"error": "Failed to get movements"})
 
+    @app.get("/api/movements/{movement_id}/items")
+    async def get_movement_items(request: Request, movement_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            mid = int(movement_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+
+        try:
+            items = await storage.getMovementItems(mid)
+            return JSONResponse(content=items)
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "Failed to get movement items"})
+
+    @app.get("/api/items")
+    async def get_items(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            data = await storage.getItems(
+                {
+                    "smart": request.query_params.get("smart"),
+                    "boxNumber": request.query_params.get("boxNumber"),
+                    "state": request.query_params.get("state"),
+                    "q": request.query_params.get("q"),
+                    "limit": request.query_params.get("limit"),
+                    "offset": request.query_params.get("offset"),
+                }
+            )
+            return JSONResponse(content=data)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to get items"})
+
+    @app.get("/api/items/{item_id}")
+    async def get_item_by_id(request: Request, item_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            iid = int(item_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+        try:
+            item = await storage.getItemById(iid)
+            if item is None:
+                return JSONResponse(status_code=404, content={"error": "Item not found"})
+            return JSONResponse(content=item)
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to get item"})
+
+    @app.patch("/api/items/{item_id}")
+    async def update_item(request: Request, item_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            iid = int(item_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+
+        try:
+            body = await request.json()
+            updates: dict[str, Any] = {}
+            if "note" in body:
+                updates["note"] = body.get("note")
+            updated = await storage.updateItem(iid, updates)
+            return JSONResponse(content=updated)
+        except InvalidRequestError as err:
+            msg = str(err)
+            if msg == "Item not found":
+                return JSONResponse(status_code=404, content={"error": msg})
+            return JSONResponse(status_code=400, content={"error": msg})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to update item"})
+
+    @app.post("/api/items/{item_id}/media")
+    async def upload_item_media(
+        request: Request,
+        item_id: str,
+        file: UploadFile | None = File(default=None),
+        kind: str | None = Form(default=None),
+    ) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            iid = int(item_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+        if file is None:
+            return JSONResponse(status_code=400, content={"error": "No file uploaded"})
+
+        mime = (file.content_type or "").strip() or "application/octet-stream"
+        inferred_kind = "video" if mime.lower().startswith("video/") else "photo"
+        actual_kind = (kind or inferred_kind).strip().lower()
+        if actual_kind not in ("photo", "video"):
+            return JSONResponse(status_code=400, content={"error": "Invalid kind. Must be 'photo' or 'video'."})
+
+        filename = (file.filename or "").strip() or None
+
+        conn = await storage.inventoryPool.acquire()
+        try:
+            await conn.execute("BEGIN")
+            try:
+                exists = await conn.fetchrow("SELECT id FROM inventory.items WHERE id = $1", iid)
+                if exists is None:
+                    await conn.execute("ROLLBACK")
+                    return JSONResponse(status_code=404, content={"error": "Item not found"})
+
+                media_row = await conn.fetchrow(
+                    """
+                    INSERT INTO inventory.item_media (
+                      item_id, kind, filename, mime, size_bytes, sha256, chunk_size, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, 0, NULL, $5, NOW())
+                    RETURNING id, chunk_size
+                    """,
+                    iid,
+                    actual_kind,
+                    filename,
+                    mime,
+                    DEFAULT_MEDIA_CHUNK_SIZE,
+                )
+                if media_row is None:
+                    raise Exception("Failed to create media record")
+                media_id = int(media_row.get("id"))  # type: ignore[call-arg]
+                chunk_size = int(media_row.get("chunk_size") or DEFAULT_MEDIA_CHUNK_SIZE)  # type: ignore[call-arg]
+
+                hasher = hashlib.sha256()
+                total = 0
+                idx = 0
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    hasher.update(chunk)
+                    await conn.execute(
+                        """
+                        INSERT INTO inventory.item_media_chunks (media_id, idx, data, created_at)
+                        VALUES ($1, $2, $3, NOW())
+                        """,
+                        media_id,
+                        idx,
+                        chunk,
+                    )
+                    idx += 1
+
+                sha256 = hasher.hexdigest() if total > 0 else None
+                await conn.execute(
+                    "UPDATE inventory.item_media SET size_bytes = $1, sha256 = $2 WHERE id = $3",
+                    total,
+                    sha256,
+                    media_id,
+                )
+
+                await conn.execute("COMMIT")
+                return JSONResponse(
+                    status_code=201,
+                    content={
+                        "id": media_id,
+                        "itemId": iid,
+                        "kind": actual_kind,
+                        "filename": filename,
+                        "mime": mime,
+                        "sizeBytes": total,
+                        "sha256": sha256,
+                        "chunkSize": chunk_size,
+                    },
+                )
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+        finally:
+            await storage.inventoryPool.release(conn)
+
+    @app.get("/api/item-media/{media_id}")
+    async def get_item_media(request: Request, media_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            mid = int(media_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+
+        conn = await storage.inventoryPool.acquire()
+        try:
+            meta = await conn.fetchrow(
+                """
+                SELECT id, filename, mime, size_bytes, chunk_size
+                FROM inventory.item_media
+                WHERE id = $1
+                  AND deleted_at IS NULL
+                """,
+                mid,
+            )
+            if meta is None:
+                await storage.inventoryPool.release(conn)
+                return JSONResponse(status_code=404, content={"error": "Media not found"})
+
+            filename = meta.get("filename")  # type: ignore[call-arg]
+            mime = str(meta.get("mime") or "application/octet-stream")  # type: ignore[call-arg]
+            size_bytes = int(meta.get("size_bytes") or 0)  # type: ignore[call-arg]
+            chunk_size = int(meta.get("chunk_size") or DEFAULT_MEDIA_CHUNK_SIZE)  # type: ignore[call-arg]
+
+            range_header = request.headers.get("range") or request.headers.get("Range") or ""
+            parsed = _parse_range_header(range_header, size_bytes)
+            is_partial = parsed is not None
+            if parsed is None:
+                start = 0
+                end = max(0, size_bytes - 1)
+            else:
+                start, end = parsed
+
+            if size_bytes == 0:
+                await storage.inventoryPool.release(conn)
+                return Response(status_code=200, content=b"", media_type=mime)
+
+            start_idx = start // chunk_size
+            end_idx = end // chunk_size
+            start_off = start - (start_idx * chunk_size)
+            end_off = end - (end_idx * chunk_size)
+            content_length = end - start + 1
+
+            async def gen():
+                try:
+                    for idx in range(start_idx, end_idx + 1):
+                        row = await conn.fetchrow(
+                            "SELECT data FROM inventory.item_media_chunks WHERE media_id = $1 AND idx = $2",
+                            mid,
+                            idx,
+                        )
+                        if row is None:
+                            break
+                        data = row.get("data")  # type: ignore[call-arg]
+                        if not isinstance(data, (bytes, bytearray)):
+                            continue
+                        chunk_data = bytes(data)
+                        if idx == start_idx:
+                            chunk_data = chunk_data[start_off:]
+                        if idx == end_idx:
+                            chunk_data = chunk_data[: end_off + 1]
+                        if chunk_data:
+                            yield chunk_data
+                finally:
+                    await storage.inventoryPool.release(conn)
+
+            headers: dict[str, str] = {
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+            }
+            if is_partial:
+                headers["Content-Range"] = f"bytes {start}-{end}/{size_bytes}"
+            if filename:
+                headers["Content-Disposition"] = f'inline; filename="{filename}"'
+
+            return StreamingResponse(
+                gen(),
+                status_code=206 if is_partial else 200,
+                media_type=mime,
+                headers=headers,
+            )
+        except Exception:
+            await storage.inventoryPool.release(conn)
+            raise
+
+    @app.delete("/api/item-media/{media_id}")
+    async def delete_item_media(request: Request, media_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            mid = int(media_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+
+        try:
+            row = await storage.inventoryPool.fetchrow(
+                "UPDATE inventory.item_media SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id",
+                mid,
+            )
+            if row is None:
+                return JSONResponse(status_code=404, content={"error": "Media not found"})
+            return Response(status_code=204)
+        except Exception:
+            return JSONResponse(status_code=500, content={"error": "Failed to delete media"})
+
     @app.get("/api/stock")
     async def get_stock(request: Request) -> Response:
         storage = _storage_from_request(request)
@@ -486,20 +809,18 @@ def register_routes(app: FastAPI) -> None:
         try:
             body = await request.json()
             updates: dict[str, Any] = {}
+            if "boxNumber" in body or "qtyDelta" in body:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Редактирование количества/коробки через PATCH запрещено в item-системе. "
+                        "Используйте перемещение/корректировку."
+                    },
+                )
             if "purchasePrice" in body:
                 updates["purchasePrice"] = body.get("purchasePrice")
             if "note" in body:
                 updates["note"] = body.get("note")
-            if "boxNumber" in body:
-                updates["boxNumber"] = body.get("boxNumber")
-            if "qtyDelta" in body:
-                try:
-                    n = float(body.get("qtyDelta"))
-                    if not (n > 0):
-                        raise ValueError
-                    updates["qtyDelta"] = int(n)
-                except Exception:
-                    return JSONResponse(status_code=400, content={"error": "Quantity must be a positive number"})
 
             movement = await storage.updateMovement(mid, updates)
             return JSONResponse(content=movement)

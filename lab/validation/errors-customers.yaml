@@ -1,0 +1,652 @@
+meta:
+  target: customers-feature
+  created: 2026-02-10
+  last_updated: 2026-02-10T18:55:43+04:00
+  agent: validator-1
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 1: КРИТИЧЕСКИЕ ОШИБКИ (баги, которые ломают функциональность)
+# ═══════════════════════════════════════════════════════════════
+
+errors:
+  - id: e-cust-cache-01
+    file: client/src/pages/customers.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После создания/архивации клиента инвалидируются только 2 ключа:
+      - ["/api/customers"]
+      - [queryKey] (текущий ключ списка, зависящий от search/showArchived)
+
+      В приложении стоит staleTime = Infinity (см. queryClient), поэтому без инвалидации
+      старые данные не будут обновляться сами.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      Если пользователь раньше открывал другой вариант списка (например, архив или другой search),
+      этот результат кэшируется под другим ключом (например, "/api/customers?includeArchived=1").
+      После create/archive этот кэш не инвалидируется и при переключении фильтра/поиска
+      пользователь увидит устаревший список до ручного обновления/перезагрузки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Любое изменение клиента должно инвалидировать все queries, которые начинаются с "/api/customers".
+      (Пример уже есть в sold-items.tsx: invalidateQueries с predicate startsWith("/api/customers")).
+
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      queryClient.invalidateQueries({ queryKey: [queryKey] });
+
+      # Вариант исправления:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 2: очевидная проблема с кэш-инвалидацией при staleTime=Infinity."
+
+    fix: null
+
+  - id: e-cust-cache-02
+    file: client/src/pages/customer-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После обновления данных клиента инвалидируются:
+      - [`/api/customers/${customerId}`] (детальная карточка)
+      - ["/api/customers"] (только базовый список без query string)
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Варианты списка клиентов с параметрами (например, "/api/customers?includeArchived=1"
+      или "/api/customers?query=...") не инвалидируются. При staleTime = Infinity
+      пользователь может увидеть старые данные клиента в списке (например старое имя/телефон)
+      до перезагрузки, если этот вариант списка уже был закэширован.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      После обновления клиента инвалидировать все ключи, начинающиеся с "/api/customers"
+      (или перейти на нормализованные queryKeys вида ["customers", {query, includeArchived}]).
+
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({ queryKey: [`/api/customers/${customerId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+
+      # Вариант исправления:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 2: тот же класс проблемы, но в карточке клиента."
+
+    fix: null
+
+  - id: e-cust-cache-03
+    file: client/src/pages/order-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В OrderDetailsPage после смены статуса отправки и после оформления возврата
+      вызывается invalidateRelated(), который инвалидирует:
+      - /api/orders (и /api/orders/:id)
+      - /api/movements, /api/stock и т.д.
+      Но не инвалидирует /api/customers/:id (карточку клиента с заказами и статистикой)
+      и не инвалидирует /api/customers?... (списки клиентов).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Страница клиента `/customers/:id` получает список заказов и агрегаты (stats) из `/api/customers/:id`,
+      где backend считает shipmentsPending/shipmentsShipped/shipmentsDelivered и returnsCount по заказам.
+      После изменений заказа эти данные меняются, но из-за staleTime = Infinity и отсутствия инвалидации
+      пользователь может видеть устаревшую статистику и список заказов в карточке клиента,
+      если уже открывал ее раньше (кэш сохранится).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Любые изменения заказа, влияющие на агрегаты/summary, должны инвалидировать также `/api/customers*`.
+
+    code_example: |
+      # Текущий код (invalidateRelated):
+      queryClient.invalidateQueries({ queryKey: [`/api/orders/${orderId}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+      ...
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+
+      # Вариант исправления:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: глубокая проверка кэш-инвалидации (customers/:id зависит от заказов)."
+
+    fix: null
+
+  - id: e-cust-cache-04
+    file: client/src/pages/order-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      invalidateRelated() инвалидирует список заказов только по ключу ["/api/orders"].
+      В приложении же реальные страницы используют варианты с query string
+      (например sold-items.tsx: "/api/orders?includeArchived=1").
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      После смены статуса отправки или создания возврата:
+      - карточка заказа обновится (инвалидируется `/api/orders/:id`)
+      - но страница "Заказы" (`/orders`) останется со старыми данными,
+        потому что ее queryKey отличается ("/api/orders?includeArchived=1") и не инвалидируется.
+      При staleTime = Infinity данные могут не обновиться вообще до ручной перезагрузки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Инвалидировать все queries, которые начинаются с "/api/orders" (как уже сделано в других местах кода).
+
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+
+      # Вариант исправления:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/orders"),
+      });
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: invalidation только базового /api/orders не покрывает реальные queryKeys с параметрами."
+
+    fix: null
+
+  - id: e-cust-error-01
+    file: client/src/pages/customers.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      useQuery() на списке клиентов не обрабатывает состояние ошибки (isError/error),
+      а data по умолчанию подставляется как пустой массив:
+        const { data: customers = [], isLoading } = useQuery(...)
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      Если запрос /api/customers упадет (500/сеть/таймаут), isLoading станет false,
+      data останется undefined, но из-за default (= []) UI покажет "Клиенты не найдены",
+      маскируя реальную проблему загрузки как "пустой результат".
+      Это вводит в заблуждение и усложняет диагностику.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно обрабатывать isError/error и показывать "Ошибка загрузки клиентов" (и текст ошибки),
+      вместо "Клиенты не найдены".
+
+    code_example: |
+      # Текущий код:
+      const { data: customers = [], isLoading } = useQuery<Customer[]>({ queryKey: [queryKey] });
+
+      # Вариант исправления:
+      const { data, isLoading, isError, error } = useQuery<Customer[]>({ queryKey: [queryKey] });
+      if (isError) return <ErrorState message={error instanceof Error ? error.message : "..." } />;
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: маскировка ошибок загрузки как пустого списка."
+
+    fix: null
+
+  - id: e-cust-error-02
+    file: client/src/pages/customer-details.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Карточка клиента не обрабатывает isError/error из useQuery().
+      При ошибке запроса data будет undefined и UI покажет "Клиент не найден".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Любая инфраструктурная ошибка (500/сеть) на /api/customers/:id будет показана как 404 в UI.
+      Пользователь подумает, что клиента нет, хотя реальная причина - ошибка сервера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Разделить состояния:
+      - 404 -> "Клиент не найден"
+      - 500/сеть -> "Ошибка загрузки клиента" + текст ошибки
+      (минимум - показать error.message из queryFn).
+
+    code_example: |
+      # Текущий код:
+      const { data, isLoading } = useQuery<CustomerDetailsResponse>({ ... });
+      ...
+      if (!data) { return <Page ...>Клиент не найден</Page>; }
+
+      # Вариант исправления:
+      const { data, isLoading, isError, error } = useQuery<CustomerDetailsResponse>({ ... });
+      if (isError) return <Page ...>Ошибка загрузки: {String(error)}</Page>;
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: неверное отображение ошибок как 'не найдено'."
+
+    fix: null
+
+  - id: e-cust-error-03
+    file: client/src/pages/sold-items.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В SoldItems список клиентов запрашивается так:
+        const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+      UI не отображает ни loading, ни ошибку загрузки клиентов.
+      Dropdown всегда показывает "+ Новый клиент" и дальше мапит customers (который = []).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      1) Во время первого захода на страницу (пока запрос в полете) пользователь может открыть Select
+         и увидеть только "+ Новый клиент", решить что клиентов нет и создать дубль.
+      2) При сетевой/серверной ошибке /api/customers UI выглядит как "клиентов нет",
+         хотя это ошибка загрузки. Это опять же провоцирует дубли клиентов через "+ Новый клиент".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Показывать явный loading/error state для клиентов в SelectContent
+      (например "Загрузка клиентов..." / "Ошибка загрузки клиентов: ..."),
+      и не подталкивать пользователя к созданию нового клиента при ошибке.
+
+    code_example: |
+      # Текущий код:
+      const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+
+      # Вариант исправления:
+      const { data, isLoading, isError, error } = useQuery<Customer[]>({ queryKey: ["/api/customers"] });
+      // В SelectContent:
+      // {isLoading ? <...>Загрузка...</...> : isError ? <...>Ошибка: ...</...> : customers.map(...)}
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: отсутствие loading/error для клиентов может приводить к дублям."
+
+    fix: null
+
+  - id: e-cust-search-01
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Поиск клиентов реализован через подстрочный LIKE по phone:
+        OR LOWER(COALESCE(phone, '')) LIKE $3
+      Где $3 = "%{query.lower()}%".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      Телефон в БД хранится как "как ввёл пользователь" (например "+7 999 123-45-67").
+      Пользователь часто ищет по цифрам без пробелов/дефисов ("7999123" или "7999").
+      Такой запрос НЕ найдёт строку с пробелами/дефисами, потому что LIKE требует
+      непрерывной подстроки.
+      В итоге поиск по телефону работает "иногда", что противоречит ожиданию в UI
+      ("Поиск по имени или телефону").
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нормализовать телефоны для поиска:
+      - Либо хранить отдельное поле phone_normalized (только цифры) + индекс и искать по нему.
+      - Либо на лету нормализовать обе стороны (REGEXP_REPLACE(phone, '\\D', '', 'g'))
+        и нормализовать query до цифр.
+
+    code_example: |
+      # Текущий SQL:
+      OR LOWER(COALESCE(phone, '')) LIKE $3
+
+      # Вариант (простая нормализация в SQL):
+      OR REGEXP_REPLACE(COALESCE(phone, ''), '\\\\D', '', 'g') LIKE $3_digits
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: "Раунд 3: поиск по телефону без нормализации часто не совпадёт с форматированными номерами."
+
+    fix: null
+
+  - id: e-cust-stats-01
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В `GET /api/customers/{id}` статистика `totalAmount` считается как сумма `itemsTotal` по заказам:
+        totalAmount = round(sum(float(o.get("itemsTotal", 0)) for o in orders), 2)
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      В UI при оформлении заказа явно показывается "Итого к оплате клиентом" и туда
+      добавляется стоимость доставки, если deliveryPayer === "buyer" (см. sold-items.tsx).
+      В текущей реализации totalAmount НЕ включает доставку, поэтому "Сумма заказов" в карточке клиента
+      будет систематически занижена для заказов, где доставку платит покупатель.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      totalAmount должен соответствовать "к оплате клиентом":
+      itemsTotal + deliveryPrice (только если deliveryPayer = buyer и доставка > 0).
+      Минимально: расширить getOrders, чтобы он возвращал deliveryTotalForCustomer, и учитывать его в stats.
+
+    code_example: |
+      # Текущий код:
+      "totalAmount": round(sum(float(o.get("itemsTotal", 0)) for o in orders), 2),
+
+      # Идея исправления:
+      # - добавить в getOrders SQL подзапрос суммы delivery_price where delivery_payer='buyer'
+      # - суммировать itemsTotal + deliveryTotalForCustomer
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        agrees: true
+        note: |
+          Раунд 3/4: несоответствие между customer stats и логикой 'к оплате клиентом' на странице заказов.
+          Не уверен на 100%: возможно задумано показывать только "сумму товаров", но UI-лейбл "Сумма заказов"
+          и отдельный расчет "к оплате клиентом" на /orders намекают, что доставка (payer=buyer) должна учитываться.
+
+    fix: null
+
+  - id: e-cust-backend-tx-01
+    file: py_backend/storage.py
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      updateShipmentStatus() выполняет 3 SQL-операции через pool без явной транзакции и без
+      закрепления за одним connection:
+      1) UPDATE inventory.shipments (меняет status)
+      2) SELECT inventory.shipment_items (для ответа)
+      3) UPDATE inventory.movements (проставляет sale_status и shipment_id)
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      1) Частично примененные изменения:
+         Если после UPDATE shipments произойдет ошибка (например кратковременный сбой БД)
+         во время следующего запроса/execute, shipment.status уже изменен, а movements — нет.
+         В результате данные становятся несогласованными.
+      2) Race condition между запросами:
+         Между шагами другой запрос может изменить shipment_items (или related данные),
+         и update движений/ответ станет неатомарным относительно shipment.status.
+
+      Это напрямую влияет на страницы заказов и карточку клиента:
+      - shipmentsPending/shipmentsShipped/shipmentsDelivered считаются по shipments
+      - sale_status / привязка shipment_id в movements используется в других местах учета
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Выполнять updateShipmentStatus атомарно в одной транзакции на одном connection
+      (acquire -> BEGIN -> UPDATE shipments -> UPDATE movements -> SELECT items -> COMMIT).
+
+    code_example: |
+      # Текущий код:
+      row = await self.inventoryPool.fetchrow("UPDATE inventory.shipments ...", ...)
+      item_rows = await self.inventoryPool.fetch("SELECT ... FROM inventory.shipment_items ...", ...)
+      await self.inventoryPool.execute("UPDATE inventory.movements ...", ...)
+
+      # Идея исправления:
+      client = await self.inventoryPool.acquire()
+      try:
+        await client.execute("BEGIN")
+        ... использовать client.fetchrow/fetch/execute ...
+        await client.execute("COMMIT")
+      except:
+        await client.execute("ROLLBACK")
+        raise
+      finally:
+        await self.inventoryPool.release(client)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:55:43+04:00
+        agrees: true
+        note: "Раунд 3: deep-check транзакционности (потенциально частичные обновления статуса отправки)."
+
+    fix: null
+
+  - id: e-cust-archive-01
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      createOrder() при переданном customerId проверяет только существование клиента:
+        SELECT id FROM inventory.customers WHERE id = $1
+      archived_at не учитывается.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК (реалистично, шанс > 5%):
+      Несмотря на то, что UI не показывает архивных клиентов в выборе (SoldItems фильтрует),
+      из-за staleTime=Infinity + неполной инвалидации (см. cache-ошибки) возможно,
+      что пользователь работает со старым списком/состоянием и отправит archived customerId
+      при оформлении заказа. Backend такой заказ примет.
+
+      Это создает ситуацию "архивный клиент снова получает новые заказы", что противоречит
+      смыслу архива как выключения из активного оборота.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Либо:
+      - Явно разрешить заказы на архивных клиентов (тогда UI не должен их скрывать/должен объяснять),
+      либо:
+      - Запретить на backend: при customerId требовать archived_at IS NULL (и возвращать 400/409).
+
+    code_example: |
+      # Текущий код:
+      customer_row = await client.fetchrow(
+        "SELECT id FROM inventory.customers WHERE id = $1",
+        customer_id_raw,
+      )
+
+      # Вариант запрета:
+      "SELECT id FROM inventory.customers WHERE id = $1 AND archived_at IS NULL"
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:55:43+04:00
+        agrees: true
+        note: "Раунд 4: контекст клиентов<->заказы (архив должен иметь смысл и на backend)."
+
+    fix: null
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 2: АРХИТЕКТУРНЫЕ ПРОБЛЕМЫ (не баги, но можно лучше)
+# ═══════════════════════════════════════════════════════════════
+
+improvements:
+  - id: i-cust-dry-01
+    file: client/src/pages/customers.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика invalidateQueries с predicate по префиксу URL копируется в нескольких местах
+      (например startsWith("/api/orders") в customers.tsx, customer-details.tsx, sold-items.tsx).
+      При этом для "/api/customers" часть страниц делает точечную инвалидацию, часть — по префиксу,
+      из-за чего легко допустить баги (как в текущем коде).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Легко забыть инвалидировать нужный вариант queryKey (особенно с query string)
+      - Код размазан по страницам и сложно проверить полноту инвалидации
+      - staleTime = Infinity усиливает последствия любой ошибки инвалидации
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий helper, например:
+        invalidateByPrefix(queryClient, "/api/orders")
+        invalidateByPrefix(queryClient, "/api/customers")
+      И использовать его везде, где сейчас повторяется predicate-логика.
+
+    code_example: |
+      // Повторяющийся паттерн:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/orders"),
+      });
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        note: "Раунд 4: DRY/поддерживаемость инвалидации кэша."
+
+    fix: null
+
+  - id: i-cust-sub-01
+    file: client/src/lib/queryClient.ts
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В качестве queryKey используется URL-строка ("/api/customers?query=..."), из-за чего
+      инвалидация должна угадывать все возможные варианты строк. Это уже привело к багам
+      (инвалидируется "/api/customers", но не "/api/customers?includeArchived=1" и т.п.).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Сложно гарантировать корректную инвалидацию при staleTime = Infinity
+      - Легко накопить кэш на десятки уникальных строк (поиск), что увеличивает память
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Перейти на нормализованные queryKeys:
+        ["customers", { query, includeArchived }]
+      А queryFn строит URL по объекту параметров.
+      Тогда инвалидация "всех клиентов" = invalidateQueries({ queryKey: ["customers"] }).
+
+    code_example: |
+      // Сейчас:
+      queryKey: ["/api/customers?query=..."]
+
+      // Лучше:
+      queryKey: ["customers", { query, includeArchived }]
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        note: "Раунд 4: архитектурное упрощение и снижение риска ошибок."
+
+    fix: null
+
+  - id: i-cust-sub-02
+    file: client/src/pages/customers.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Поиск по клиентам отправляет запрос на каждый ввод символа (нет debounce),
+      и при staleTime = Infinity кэш может разрастаться по множеству queryKey-строк.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Лишняя нагрузка на backend
+      - Потенциальный рост памяти на клиенте (много уникальных queryKey)
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить debounce (например 300-500мс) и использовать debouncedSearch
+      для формирования queryKey.
+
+    code_example: |
+      // Идея:
+      const debounced = useDebounce(search, 300);
+      // queryKey строить от debounced
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        note: "Раунд 4: оптимизация запросов и кэша."
+
+    fix: null
+
+  - id: i-cust-sub-03
+    file: py_backend/inventory_schema.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Телефон хранится как свободный TEXT без нормализованного представления для поиска.
+      Поиск в getCustomers основан на LIKE по исходной строке (см. e-cust-search-01).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Непредсказуемый поиск по телефону (форматирование ломает совпадения)
+      - Если в будущем клиентов станет больше, нормализация "на лету" (regex) будет дорогой
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить поле phone_normalized (только цифры) и индекс по нему.
+      Обновлять при insert/update (или computed/generated column в Postgres).
+
+    code_example: |
+      -- Возможный подход:
+      -- phone_normalized TEXT GENERATED ALWAYS AS (regexp_replace(coalesce(phone,''), '\\D', '', 'g')) STORED
+      -- CREATE INDEX ... ON inventory.customers (phone_normalized)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T18:27:27+04:00
+        note: "Раунд 4: улучшение поиска и масштабируемости."
+
+    fix: null

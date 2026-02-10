@@ -42,6 +42,7 @@ const navigation: NavItem[] = [
   { title: "Добавить движение", href: "/movement", icon: PlusCircle },
   { title: "Клиенты", href: "/customers", icon: Users },
   { title: "Остатки", href: "/stock", icon: Warehouse },
+  { title: "Экземпляры", href: "/items", icon: Package },
   { title: "Коробки", href: "/boxes", icon: Package },
   { title: "История движений", href: "/history", icon: History },
   { title: "Заказы", href: "/orders", icon: ShoppingCart },

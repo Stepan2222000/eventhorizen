@@ -1,0 +1,171 @@
+meta:
+  target: py_backend/
+  created: 2026-02-10
+  last_updated: 2026-02-10T14:57:46Z
+
+errors:
+  - id: e-ii-001
+    file: py_backend/main.py
+    category: resource-leak
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      ApiLoggingMiddleware для всех путей `/api/*` полностью вычитывает `response.body_iterator`
+      в память (`body += chunk`), затем возвращает новый `Response(content=body, ...)`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для `GET /api/item-media/{mediaId}` (видео/фото) ответ может быть большим и/или стриминговым.
+      Middleware:
+      - ломает потоковую отдачу (стрим превращается в буферизацию),
+      - может привести к огромному потреблению памяти и падению процесса (OOM),
+      - ухудшает latency (пока всё не вычитано, клиент не получает данные).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Логирование не должно вычитывать тело ответа целиком для бинарных/стриминговых ответов.
+      Минимум: логировать только метаданные (status, duration) и JSON (с лимитом размера),
+      а для `StreamingResponse`/media endpoints пропускать чтение тела.
+
+    code_example: |
+      # py_backend/main.py (ApiLoggingMiddleware.dispatch)
+      body = b""
+      async for chunk in response.body_iterator:
+          body += chunk
+      ...
+      return Response(content=body, ...)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:26:52Z
+        agrees: true
+        note: "Раунд 2: очевидная проблема для media/streaming API"
+
+    fix: null
+
+  - id: e-ii-002
+    file: py_backend/routes.py
+    category: logic-error
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Эндпоинт `POST /api/movements/{movement_id}/return` берёт sale-движение и вызывает
+      `storage.createMovement({ reason: 'return', qtyDelta: +N, ... })` без itemIds.
+
+      В `DatabaseStorage.createMovementAttempt()` reason='return' попадает в ветку `is_increase` и
+      создаёт НОВЫЕ строки в `inventory.items` (как purchase), а не возвращает ранее проданные items.
+      При этом исходные проданные экземпляры, привязанные к sale-движению, остаются в состоянии `sold`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Реалистичный сценарий: продали 2 штуки, затем нажали "вернуть на склад".
+      Система:
+      - добавит 2 новых item-экземпляра на склад,
+      - но "те самые" проданные экземпляры так и останутся `sold`,
+      - трассировка возврата станет неверной (возврат не связан с исходными items),
+      - в истории экземпляров появится логическая путаница (возврат как будто создал новые штуки).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Возврат продажи должен возвращать те же item-экземпляры:
+      - выбрать item_id из `inventory.movement_items` для исходного sale movement,
+      - перевести эти items в `state='in_stock'`, выставить `box_number`,
+        очистить `sold_movement_id`, обновить `last_movement_id`,
+      - привязать эти же item_id к return movement в `movement_items`.
+      Либо эндпоинт должен требовать явные `itemIds` (как в order-return), а не создавать новые items.
+
+    code_example: |
+      # py_backend/routes.py (return_movement)
+      return_movement = await storage.createMovement({ ..., "reason": "return", "qtyDelta": abs(...), ... })
+
+      # py_backend/storage.py (createMovementAttempt): return -> is_increase -> INSERT items(generate_series)
+      is_increase = reason in ("purchase", "return") or (reason == "adjust" and qty_delta > 0)
+      if is_increase:
+          INSERT INTO inventory.items (...) SELECT ... FROM generate_series(1, $4::int)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:30:53Z
+        agrees: true
+        note: |
+          Раунд 2: возврат продажи создаёт новые экземпляры вместо возврата проданных.
+          Не вижу использования этого эндпоинта в `client/src` (похоже legacy), но если он реально используется,
+          это будет давать неверную трассировку экземпляров.
+
+    fix: null
+
+improvements:
+  - id: i-ii-001
+    file: shared/schema.ts
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Контракт по возвратам "вернуть те же экземпляры" реализован на backend (требует itemIds),
+      но общий тип/валидация (shared Zod schema) и python-типы допускают отсутствие itemIds.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Любой новый UI/клиент, который доверится shared schema, может начать отправлять payload без itemIds.
+      - В результате backend начнет стабильно отдавать 400, а ошибка будет выглядеть как "непонятный баг".
+      - Это ухудшает трассируемость требований: "itemIds обязательны" не закреплено в контракте.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Явно зафиксировать требование в контракте:
+      - в shared schema сделать `itemIds` обязательным для возврата (и валидировать длину),
+      - синхронизировать python-типы (py_backend/types.py) с тем же требованием.
+
+    code_example: |
+      # shared/schema.ts
+      export const createOrderReturnItemSchema = z.object({
+        ...
+        itemIds: z.array(z.number().int().positive()).optional(),
+      })
+
+      # py_backend/storage.py
+      if not isinstance(item_ids_raw, list) or len(item_ids_raw) == 0:
+          raise InvalidRequestError("... нужно выбрать ... itemIds ...")
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:56:57Z
+        note: "Раунд 4: контракт/типы не отражают обязательность itemIds для return"
+
+    fix: null
+
+  - id: i-ii-002
+    file: py_backend/routes.py
+    category: dead-code
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В API присутствует отдельный эндпоинт `POST /api/movements/{movement_id}/return`, который:
+      - не используется текущим frontend-кодом (в `client/src` нет вызовов),
+      - конфликтует с основной моделью возврата через заказы (`POST /api/orders/{id}/returns`)
+        и требованием "вернуть те же экземпляры".
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Два разных пути "возврата" размывают бизнес-правило и усложняют поддержку.
+      - Легко случайно начать использовать неправильный путь и получить некорректную трассировку items.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Либо удалить/спрятать эндпоинт как legacy, либо привести его к той же семантике,
+      что и order-return (возврат конкретных itemIds, а не создание новых items).
+
+    code_example: |
+      # py_backend/routes.py
+      @app.post(\"/api/movements/{movement_id}/return\")
+      async def return_movement(...):
+          ...
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:56:57Z
+        note: "Раунд 4: похоже на legacy endpoint без использования в текущем UI"
+
+    fix: null

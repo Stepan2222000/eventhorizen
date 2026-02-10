@@ -20,7 +20,7 @@ type BoxesApiResponse = {
   unboxed: { positionsCount: number; totalQty: number };
 };
 
-type SmartBoxesApiResponse = Array<{
+export type SmartBoxesApiResponse = Array<{
   boxNumber: string;
   qty: number;
   description: string | null;

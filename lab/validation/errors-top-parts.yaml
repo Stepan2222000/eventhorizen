@@ -1,0 +1,205 @@
+meta:
+  target: feature/top-parts
+  created: 2026-02-10
+  last_updated: 2026-02-10T15:16:06Z
+  agent: validator-1
+  scope_files:
+    - client/src/pages/top-parts.tsx
+    - client/src/pages/stock-details.tsx
+    - client/src/pages/add-movement.tsx
+    - client/src/pages/bulk-import.tsx
+    - client/src/pages/order-details.tsx
+    - client/src/pages/sold-items.tsx
+    - client/src/lib/queryClient.ts
+    - shared/schema.ts
+    - py_backend/inventory_schema.py
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - py_backend/types.py
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 1: КРИТИЧЕСКИЕ ОШИБКИ (баги, которые сломают программу
+# или дадут неверную аналитику с вероятностью > 5%)
+# ═══════════════════════════════════════════════════════════════
+
+errors:
+  - id: e-top-001
+    file: client/src/pages/top-parts.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница проверяет только `isLoading`. Если запрос упал (500/NetworkError),
+      `isLoading === false`, а `items === undefined`, и UI показывает
+      "Нет данных для отображения" как будто продаж не было.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь получает ложный вывод "нет данных" вместо сообщения об ошибке,
+      и может принять решение на основе неверной картины (особенно при staleTime: Infinity).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Отдельно обрабатывать состояние ошибки (`isError`/`error`) и показывать
+      понятный текст "Ошибка загрузки" (и кнопку повторить/перезагрузить),
+      а "Нет данных" показывать только при успешном ответе с пустым списком.
+
+    code_example: |
+      // Проблемный код:
+      const { data: items, isLoading } = useQuery<TopPart[]>({
+        queryKey: [`/api/top-parts?mode=${mode}`],
+      });
+
+      if (isLoading) { ... }
+      // error-state игнорируется -> items может быть undefined
+
+      // Как исправить (пример):
+      const { data: items, isLoading, isError, error } = useQuery<TopPart[]>({
+        queryKey: [`/api/top-parts?mode=${mode}`],
+      });
+      if (isError) return <ErrorState message={String(error)} />;
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:30:56Z
+        agrees: true
+        note: "Раунд 2: UI маскирует ошибки API как 'нет данных'"
+
+    fix: null
+
+  - id: e-top-002
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      `getTopParts()` учитывает "старые продажи" из `inventory.movements` (reason='sale', order_id IS NULL),
+      но никак не учитывает возвраты этих продаж, которые оформляются отдельным movement
+      с `reason='return'` (через `/api/movements/{movement_id}/return`).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если продажа была возвращена на склад, она продолжит учитываться в:
+      - "Количество продаж" (totalSales)
+      - доходности (avgProfit, profitMargin)
+      - комбинированном коэффициенте
+      и будет искусственно завышать рейтинг.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для legacy-продаж, у которых существует возврат, нужно исключать продажу из аналитики
+      (или вычитать возвращенное количество и соответствующую выручку/стоимость/доставку).
+      Сейчас endpoint возврата делает только полный возврат, поэтому достаточно "исключить продажу".
+
+    code_example: |
+      # Проблемный код (legacy sales попадают в расчёт без учёта возврата):
+      legacy_sales_rows = await self.inventoryPool.fetch(
+        \"\"\"
+        SELECT smart, qty_delta, sale_price, delivery_price
+        FROM inventory.movements
+        WHERE reason = 'sale' AND order_id IS NULL
+        \"\"\"
+      )
+
+      for sale in legacy_sales_rows:
+        ...
+        acc[\"revenue\"] += sale_price * qty
+        acc[\"cost\"] += avg_purchase * qty
+        acc[\"deliveryCost\"] += delivery_price
+        acc[\"totalSalesQty\"] += qty
+
+      # Возврат legacy-продажи создаётся как отдельный movement:
+      # routes.py: note = f\"Возврат продажи #{mid}\"
+      # reason = \"return\"
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:35:48Z
+        agrees: true
+        note: "Раунд 2: legacy возвраты не уменьшают продажи/прибыль в рейтинге"
+
+    fix: null
+
+# ═══════════════════════════════════════════════════════════════
+# БЛОК 2: АРХИТЕКТУРНЫЕ ПРОБЛЕМЫ (не баги, но можно лучше)
+# ═══════════════════════════════════════════════════════════════
+
+improvements:
+  - id: i-top-001
+    file: client/src/pages/add-movement.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Инвалидация кэша для top-parts (3 режима: profit/sales/combined) продублирована вручную в нескольких местах:
+      - client/src/pages/add-movement.tsx
+      - client/src/pages/bulk-import.tsx
+      - client/src/pages/order-details.tsx
+      - client/src/pages/sold-items.tsx
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При `staleTime: Infinity` любая забытая инвалидация приводит к "вечной" устаревшей аналитике.
+      Дублирование повышает риск, что в одном из мест забудут один из режимов или добавят новый режим и не обновят все вызовы.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести в одну helper-функцию (например, `invalidateTopParts(queryClient)`),
+      или инвалидировать по predicate: `startsWith("/api/top-parts")` вместо 3 отдельных ключей.
+
+    code_example: |
+      // Текущий код (пример из add-movement.tsx):
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
+
+      // Как улучшить (пример):
+      queryClient.invalidateQueries({
+        predicate: (q) =>
+          Array.isArray(q.queryKey) &&
+          typeof q.queryKey[0] === "string" &&
+          q.queryKey[0].startsWith("/api/top-parts"),
+      });
+
+    found_count: 1
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:19Z
+        note: "Раунд 4: DRY, чтобы не ловить вечные stale-данные по одному из режимов"
+
+    fix: null
+
+  - id: i-top-002
+    file: py_backend/storage.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Формула `combinedScore` захардкожена с магическими числами (`/10`, clamp до 100, веса 0.5/0.5),
+      и не описано, что означает масштаб коэффициента (0..100? 0..10?).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Трудно объяснить пользователю, почему коэффициент именно такой (напр., 1.9).
+      - Любые изменения формулы сложнее делать безопасно: нет места, где явно заданы константы/комментарии.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      - Вынести константы в именованные переменные (например, `SALES_NORM_DIVISOR`, `PROFIT_NORM_DIVISOR`, `MAX_NORM`).
+      - Добавить комментарий, какой диапазон ожидается.
+      - Опционально: добавить тест-кейсы на несколько сценариев (profit<0, sales>>1000, sales=0).
+
+    code_example: |
+      normalized_sales = min(total_sales / 10, 100)
+      normalized_profit = min(max(avg_profit, 0) / 10, 100)
+      combined_score = normalized_sales * 0.5 + normalized_profit * 0.5
+
+    found_count: 1
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-10T14:48:19Z
+        note: "Раунд 4: формула коэффициента не самодокументирована"
+
+    fix: null

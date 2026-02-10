@@ -199,6 +199,7 @@ class OrderItemInput(BaseModel):
     qty: int
     salePrice: str
     boxNumber: str
+    itemIds: list[int] | None = None
 
 
 class ShipmentInput(BaseModel):
@@ -329,6 +330,7 @@ class CreateOrderReturnItem(BaseModel):
     orderItemId: int
     qty: int
     boxNumber: str
+    itemIds: list[int] | None = None
 
 
 class CreateOrderReturnInput(BaseModel):

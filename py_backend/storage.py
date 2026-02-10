@@ -131,6 +131,12 @@ def toDbNumericString(value: Any) -> str | None:
     return str(value)
 
 
+def formatItemCode(item_id: int) -> str:
+    # Human-readable instance code for labels/search.
+    # Uses DB identity `id` so it's unique and never reused.
+    return f"EH-{item_id:06d}"
+
+
 def requireNonEmpty(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise InvalidRequestError(f"{field} обязательно")
@@ -265,7 +271,12 @@ class DatabaseStorage:
 
     async def getCurrentStockTx(self, client: DbConnectionProtocol, smart: str) -> int:
         row = await client.fetchrow(
-            "SELECT COALESCE(SUM(qty_delta), 0) as total_qty FROM inventory.movements WHERE smart = $1",
+            """
+            SELECT COUNT(*)::text as total_qty
+            FROM inventory.items
+            WHERE smart = $1
+              AND state = 'in_stock'
+            """,
             smart,
         )
         return toInt(_obj_get(row, "total_qty"))
@@ -273,9 +284,11 @@ class DatabaseStorage:
     async def getCurrentBoxStockTx(self, client: DbConnectionProtocol, smart: str, box_number: str) -> int:
         row = await client.fetchrow(
             """
-            SELECT COALESCE(SUM(qty_delta), 0) as total_qty
-            FROM inventory.movements
-            WHERE smart = $1 AND box_number = $2
+            SELECT COUNT(*)::text as total_qty
+            FROM inventory.items
+            WHERE smart = $1
+              AND box_number = $2
+              AND state = 'in_stock'
             """,
             smart,
             box_number,
@@ -567,10 +580,113 @@ class DatabaseStorage:
                     movement["shippingMethodId"],
                     movement["saleStatus"],
                 )
-
-                await client.execute("COMMIT")
                 if insert_row is None:
                     raise Exception("Movement not found after insert")
+
+                movement_id = toInt(_obj_get(insert_row, "id"))
+                smart = cast(str, movement.get("smart") or "")
+                reason = cast(str, movement.get("reason") or "")
+                qty_delta = toInt(movement.get("qtyDelta"))
+                box = cast(str, movement.get("boxNumber") or "")
+                qty = abs(qty_delta)
+
+                is_increase = reason in ("purchase", "return") or (reason == "adjust" and qty_delta > 0)
+                is_decrease = reason in ("sale", "writeoff") or (reason == "adjust" and qty_delta < 0)
+
+                if qty <= 0:
+                    raise InvalidRequestError("Количество должно быть больше 0")
+
+                if is_increase:
+                    # Create concrete instances and link them to the movement.
+                    await client.execute(
+                        """
+                        WITH inserted AS (
+                          INSERT INTO inventory.items (
+                            smart, state, box_number, note,
+                            purchase_movement_id, sold_movement_id, written_off_movement_id, last_movement_id,
+                            created_at, updated_at
+                          )
+                          SELECT
+                            $1, 'in_stock', $2, NULL,
+                            $3, NULL, NULL, $3,
+                            NOW(), NOW()
+                          FROM generate_series(1, $4::int)
+                          RETURNING id
+                        )
+                        INSERT INTO inventory.movement_items (movement_id, item_id)
+                        SELECT $3, id
+                        FROM inserted
+                        """,
+                        smart,
+                        box,
+                        movement_id,
+                        qty,
+                    )
+
+                elif is_decrease:
+                    # Pick concrete instances from the specified box and move them out of stock.
+                    picked_rows = await client.fetch(
+                        """
+                        SELECT id
+                        FROM inventory.items
+                        WHERE smart = $1
+                          AND box_number = $2
+                          AND state = 'in_stock'
+                        ORDER BY id ASC
+                        LIMIT $3
+                        FOR UPDATE
+                        """,
+                        smart,
+                        box,
+                        qty,
+                    )
+                    picked_ids = [toInt(_obj_get(r, "id")) for r in picked_rows]
+                    if len(picked_ids) < qty:
+                        available = await self.getCurrentBoxStockTx(client, smart, box)
+                        raise InsufficientBoxStockError(smart, box, available, qty)
+
+                    next_state: str
+                    sold_movement_id: int | None = None
+                    written_off_movement_id: int | None = None
+                    if reason == "sale":
+                        next_state = "sold"
+                        sold_movement_id = movement_id
+                    else:
+                        next_state = "written_off"
+                        written_off_movement_id = movement_id
+
+                    await client.execute(
+                        """
+                        UPDATE inventory.items
+                        SET state = $2,
+                            box_number = NULL,
+                            sold_movement_id = COALESCE($3, sold_movement_id),
+                            written_off_movement_id = COALESCE($4, written_off_movement_id),
+                            last_movement_id = $5,
+                            updated_at = NOW()
+                        WHERE id = ANY($1::bigint[])
+                        """,
+                        picked_ids,
+                        next_state,
+                        sold_movement_id,
+                        written_off_movement_id,
+                        movement_id,
+                    )
+
+                    await client.execute(
+                        """
+                        INSERT INTO inventory.movement_items (movement_id, item_id)
+                        SELECT $1, UNNEST($2::bigint[])
+                        """,
+                        movement_id,
+                        picked_ids,
+                    )
+
+                else:
+                    # transfer is a separate endpoint; everything else should have been covered above.
+                    raise InvalidRequestError(f"Unsupported reason for item-based movement: {reason}")
+
+                await client.execute("COMMIT")
                 mapped = self.mapMovementRow(insert_row)
                 return self.enrichMovement(mapped)
             except Exception:
@@ -623,6 +739,38 @@ class DatabaseStorage:
             return None
         return self.enrichMovement(self.mapMovementRow(row))
 
+    async def getMovementItems(self, movement_id: int) -> list[dict[str, Any]]:
+        rows = await self.inventoryPool.fetch(
+            """
+            SELECT
+              i.id,
+              i.smart,
+              i.state,
+              i.box_number,
+              i.note,
+              i.created_at,
+              i.updated_at
+            FROM inventory.movement_items mi
+            JOIN inventory.items i ON i.id = mi.item_id
+            WHERE mi.movement_id = $1
+            ORDER BY i.id ASC
+            """,
+            movement_id,
+        )
+        return [
+            {
+                "id": toInt(_obj_get(r, "id")),
+                "itemCode": formatItemCode(toInt(_obj_get(r, "id"))),
+                "smart": _obj_get(r, "smart"),
+                "state": _obj_get(r, "state"),
+                "boxNumber": _obj_get(r, "box_number"),
+                "note": _obj_get(r, "note"),
+                "createdAt": toDateIso(_obj_get(r, "created_at")),
+                "updatedAt": toDateIso(_obj_get(r, "updated_at")),
+            }
+            for r in rows
+        ]
+
     async def getPurchasesBySmart(self, smart: str) -> list[dict[str, Any]]:
         rows = await self.inventoryPool.fetch(
             "SELECT * FROM inventory.movements WHERE smart = $1 AND reason = 'purchase' ORDER BY created_at DESC",
@@ -639,12 +787,18 @@ class DatabaseStorage:
 
     async def updateMovement(self, movement_id: int, updates: Mapping[str, Any]) -> dict[str, Any]:
         updates_dict = _as_dict(updates)
+        allowed_keys = {"purchasePrice", "note"}
+        unknown_keys = sorted(set(updates_dict.keys()) - allowed_keys)
+        if unknown_keys:
+            raise InvalidRequestError(
+                "В системе учета экземпляров редактирование количества/коробки через PATCH запрещено. "
+                "Используйте перемещение/корректировку."
+            )
+
         has_purchase_price = "purchasePrice" in updates_dict
         has_note = "note" in updates_dict
-        has_qty_delta = "qtyDelta" in updates_dict
-        has_box_number = "boxNumber" in updates_dict
 
-        if not has_purchase_price and not has_note and not has_qty_delta and not has_box_number:
+        if not has_purchase_price and not has_note:
             raise Exception("No fields to update")
 
         client = await self.inventoryPool.acquire()
@@ -677,33 +831,6 @@ class DatabaseStorage:
                 if has_note:
                     set_clauses.append(f"note = ${param}")
                     values.append(updates_dict.get("note"))
-                    param += 1
-
-                if has_box_number:
-                    box_number = updates_dict.get("boxNumber")
-                    if box_number is None:
-                        raise InvalidRequestError("Номер коробки обязателен")
-                    box = requireBoxName(box_number, "Номер коробки")
-                    box = await self.requireActiveBoxNameTx(client, box, "Номер коробки")
-                    set_clauses.append(f"box_number = ${param}")
-                    values.append(box)
-                    param += 1
-
-                if has_qty_delta:
-                    old_qty_delta = toInt(_obj_get(existing, "qty_delta"))
-                    next_qty_delta = abs(cast(float, updates_dict.get("qtyDelta")))
-
-                    current_stock = await self.getCurrentStockTx(client, cast(str, _obj_get(existing, "smart")))
-                    next_stock = current_stock - old_qty_delta + next_qty_delta
-                    if next_stock < 0:
-                        raise InsufficientStockError(
-                            cast(str, _obj_get(existing, "smart")),
-                            current_stock,
-                            current_stock - toInt(next_stock),
-                        )
-
-                    set_clauses.append(f"qty_delta = ${param}")
-                    values.append(next_qty_delta)
                     param += 1
 
                 if len(set_clauses) == 0:
@@ -773,14 +900,17 @@ class DatabaseStorage:
         unboxed_row = await self.inventoryPool.fetchrow(
             """
             WITH totals AS (
-              SELECT smart, COALESCE(SUM(qty_delta), 0)::int AS total_qty
-              FROM inventory.movements
+              SELECT smart, COUNT(*)::int AS total_qty
+              FROM inventory.items
+              WHERE state = 'in_stock'
               GROUP BY smart
             ),
             boxed AS (
-              SELECT smart, COALESCE(SUM(qty_delta), 0)::int AS boxed_qty
-              FROM inventory.movements
-              WHERE box_number IS NOT NULL AND LENGTH(TRIM(box_number)) > 0
+              SELECT smart, COUNT(*)::int AS boxed_qty
+              FROM inventory.items
+              WHERE state = 'in_stock'
+                AND box_number IS NOT NULL
+                AND LENGTH(TRIM(box_number)) > 0
               GROUP BY smart
             ),
             diff AS (
@@ -818,14 +948,17 @@ class DatabaseStorage:
         rows = await self.inventoryPool.fetch(
             """
             WITH totals AS (
-              SELECT smart, COALESCE(SUM(qty_delta), 0)::int AS total_qty
-              FROM inventory.movements
+              SELECT smart, COUNT(*)::int AS total_qty
+              FROM inventory.items
+              WHERE state = 'in_stock'
               GROUP BY smart
             ),
             boxed AS (
-              SELECT smart, COALESCE(SUM(qty_delta), 0)::int AS boxed_qty
-              FROM inventory.movements
-              WHERE box_number IS NOT NULL AND LENGTH(TRIM(box_number)) > 0
+              SELECT smart, COUNT(*)::int AS boxed_qty
+              FROM inventory.items
+              WHERE state = 'in_stock'
+                AND box_number IS NOT NULL
+                AND LENGTH(TRIM(box_number)) > 0
               GROUP BY smart
             )
             SELECT
@@ -1075,6 +1208,27 @@ class DatabaseStorage:
                 if available < qty:
                     raise InsufficientBoxStockError(smart, from_box, available, qty)
 
+                picked_rows = await client.fetch(
+                    """
+                    SELECT id
+                    FROM inventory.items
+                    WHERE smart = $1
+                      AND box_number = $2
+                      AND state = 'in_stock'
+                    ORDER BY id ASC
+                    LIMIT $3
+                    FOR UPDATE
+                    """,
+                    smart,
+                    from_box,
+                    qty,
+                )
+                picked_ids = [toInt(_obj_get(r, "id")) for r in picked_rows]
+                if len(picked_ids) < qty:
+                    # Re-check availability for a better error message.
+                    available = await self.getCurrentBoxStockTx(client, smart, from_box)
+                    raise InsufficientBoxStockError(smart, from_box, available, qty)
+
                 from_note = f"→ {to_box}" + (f" · {note}" if note else "")
                 to_note = f"← {from_box}" + (f" · {note}" if note else "")
 
@@ -1125,6 +1279,37 @@ class DatabaseStorage:
                     "UPDATE inventory.movements SET linked_movement_id = $1 WHERE id = $2",
                     to_id,
                     from_id,
+                )
+
+                # Apply the transfer to physical items and link them to both movement rows.
+                await client.execute(
+                    """
+                    UPDATE inventory.items
+                    SET box_number = $1,
+                        last_movement_id = $2,
+                        updated_at = NOW()
+                    WHERE id = ANY($3::bigint[])
+                    """,
+                    to_box,
+                    to_id,
+                    picked_ids,
+                )
+
+                await client.execute(
+                    """
+                    INSERT INTO inventory.movement_items (movement_id, item_id)
+                    SELECT $1, UNNEST($2::bigint[])
+                    """,
+                    from_id,
+                    picked_ids,
+                )
+                await client.execute(
+                    """
+                    INSERT INTO inventory.movement_items (movement_id, item_id)
+                    SELECT $1, UNNEST($2::bigint[])
+                    """,
+                    to_id,
+                    picked_ids,
                 )
 
                 await client.execute("COMMIT")
@@ -1240,10 +1425,8 @@ class DatabaseStorage:
         row = await self.inventoryPool.fetchrow(
             """
             SELECT
-              COUNT(*)::text as movements_count,
-              COALESCE(SUM(qty_delta), 0) as total_qty
-            FROM inventory.movements
-            WHERE smart = $1
+              (SELECT COUNT(*)::text FROM inventory.movements WHERE smart = $1) as movements_count,
+              (SELECT COUNT(*)::text FROM inventory.items WHERE smart = $1 AND state = 'in_stock') as total_qty
             """,
             smart,
         )
@@ -1291,8 +1474,240 @@ class DatabaseStorage:
             "existed": True,
             "name": _obj_get(smart_info, "name"),
             "brand": _obj_get(smart_info, "brand"),
-            "description": _obj_get(smart_info, "description"),
-            "articles": _obj_get(smart_info, "articles", []),
+                "description": _obj_get(smart_info, "description"),
+                "articles": _obj_get(smart_info, "articles", []),
+            }
+
+    async def getItems(self, options: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        options_data = _as_dict(options) if options is not None else {}
+        smart_raw = options_data.get("smart")
+        state_raw = options_data.get("state")
+        q_raw = options_data.get("q")
+        box_filter_raw = options_data.get("boxNumber")
+
+        smart: str | None = smart_raw.strip() if isinstance(smart_raw, str) and smart_raw.strip() else None
+        state: str | None = state_raw.strip() if isinstance(state_raw, str) and state_raw.strip() else None
+        q: str | None = q_raw.strip() if isinstance(q_raw, str) and q_raw.strip() else None
+
+        box_filter: str | None = None
+        if isinstance(box_filter_raw, str) and box_filter_raw.strip():
+            requested = requireBoxName(box_filter_raw, "Коробка")
+            norm = normalize_box_name(requested)
+            resolved = await self.inventoryPool.fetchrow(
+                "SELECT name FROM inventory.boxes WHERE name_norm = $1",
+                norm,
+            )
+            if resolved is None:
+                return {"items": [], "total": 0, "limit": 0, "offset": 0}
+            box_filter = cast(str, _obj_get(resolved, "name"))
+
+        limit = max(1, min(200, toInt(options_data.get("limit") or 50)))
+        offset = max(0, toInt(options_data.get("offset") or 0))
+
+        where: list[str] = []
+        args: list[Any] = []
+        idx = 1
+
+        if smart is not None:
+            if not self.smartCache.getBySmart(smart):
+                raise InvalidRequestError(f"SMART код не найден в справочнике: {smart}")
+            where.append(f"smart = ${idx}")
+            args.append(smart)
+            idx += 1
+
+        if state is not None:
+            where.append(f"state = ${idx}")
+            args.append(state)
+            idx += 1
+
+        if box_filter is not None:
+            where.append(f"box_number = ${idx}")
+            args.append(box_filter)
+            idx += 1
+
+        # Lightweight search by item code like "EH-000123" or plain numeric id.
+        if q is not None:
+            q_up = q.upper()
+            parsed_id: int | None = None
+            if q_up.startswith("EH-"):
+                parsed_id = toInt(q_up[3:])
+            elif q.isdigit():
+                parsed_id = toInt(q)
+            if parsed_id and parsed_id > 0:
+                where.append(f"id = ${idx}")
+                args.append(parsed_id)
+                idx += 1
+            else:
+                where.append(f"(smart ILIKE ${idx} OR note ILIKE ${idx})")
+                args.append(f"%{q}%")
+                idx += 1
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+
+        total_row = await self.inventoryPool.fetchrow(
+            f"SELECT COUNT(*)::text as count FROM inventory.items {where_sql}",
+            *args,
+        )
+        total = toInt(_obj_get(total_row, "count"))
+
+        rows = await self.inventoryPool.fetch(
+            f"""
+            SELECT id, smart, state, box_number, note, created_at, updated_at
+            FROM inventory.items
+            {where_sql}
+            ORDER BY id DESC
+            LIMIT ${idx} OFFSET ${idx + 1}
+            """,
+            *args,
+            limit,
+            offset,
+        )
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item_id = toInt(_obj_get(row, "id"))
+            smart_code = cast(str, _obj_get(row, "smart"))
+            smart_info = self.smartCache.getBySmart(smart_code)
+            items.append(
+                {
+                    "id": item_id,
+                    "itemCode": formatItemCode(item_id),
+                    "smart": smart_code,
+                    "state": _obj_get(row, "state"),
+                    "boxNumber": _obj_get(row, "box_number"),
+                    "note": _obj_get(row, "note"),
+                    "createdAt": toDateIso(_obj_get(row, "created_at")),
+                    "updatedAt": toDateIso(_obj_get(row, "updated_at")),
+                    "articles": _obj_get(smart_info, "articles") if smart_info else [],
+                    "name": _obj_get(smart_info, "name") if smart_info else None,
+                    "brand": _obj_get(smart_info, "brand") if smart_info else None,
+                    "description": _obj_get(smart_info, "description") if smart_info else None,
+                }
+            )
+
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    async def getItemById(self, item_id: int) -> dict[str, Any] | None:
+        row = await self.inventoryPool.fetchrow(
+            """
+            SELECT
+              id, smart, state, box_number, note,
+              purchase_movement_id, sold_movement_id, written_off_movement_id, last_movement_id,
+              created_at, updated_at
+            FROM inventory.items
+            WHERE id = $1
+            """,
+            item_id,
+        )
+        if row is None:
+            return None
+
+        smart_code = cast(str, _obj_get(row, "smart"))
+        smart_info = self.smartCache.getBySmart(smart_code)
+
+        movement_rows = await self.inventoryPool.fetch(
+            """
+            SELECT m.*
+            FROM inventory.movement_items mi
+            JOIN inventory.movements m ON m.id = mi.movement_id
+            WHERE mi.item_id = $1
+            ORDER BY m.created_at DESC, m.id DESC
+            """,
+            item_id,
+        )
+        movements = [self.enrichMovement(self.mapMovementRow(r)) for r in movement_rows]
+
+        media_rows = await self.inventoryPool.fetch(
+            """
+            SELECT
+              id,
+              kind,
+              filename,
+              mime,
+              size_bytes,
+              sha256,
+              chunk_size,
+              created_at
+            FROM inventory.item_media
+            WHERE item_id = $1
+              AND deleted_at IS NULL
+            ORDER BY created_at DESC, id DESC
+            """,
+            item_id,
+        )
+        media = [
+            {
+                "id": toInt(_obj_get(r, "id")),
+                "kind": _obj_get(r, "kind"),
+                "filename": _obj_get(r, "filename"),
+                "mime": _obj_get(r, "mime"),
+                "sizeBytes": int(_obj_get(r, "size_bytes") or 0),
+                "sha256": _obj_get(r, "sha256"),
+                "chunkSize": toInt(_obj_get(r, "chunk_size")),
+                "createdAt": toDateIso(_obj_get(r, "created_at")),
+            }
+            for r in media_rows
+        ]
+
+        return {
+            "id": toInt(_obj_get(row, "id")),
+            "itemCode": formatItemCode(toInt(_obj_get(row, "id"))),
+            "smart": smart_code,
+            "state": _obj_get(row, "state"),
+            "boxNumber": _obj_get(row, "box_number"),
+            "note": _obj_get(row, "note"),
+            "purchaseMovementId": _obj_get(row, "purchase_movement_id"),
+            "soldMovementId": _obj_get(row, "sold_movement_id"),
+            "writtenOffMovementId": _obj_get(row, "written_off_movement_id"),
+            "lastMovementId": _obj_get(row, "last_movement_id"),
+            "createdAt": toDateIso(_obj_get(row, "created_at")),
+            "updatedAt": toDateIso(_obj_get(row, "updated_at")),
+            "articles": _obj_get(smart_info, "articles") if smart_info else [],
+            "name": _obj_get(smart_info, "name") if smart_info else None,
+            "brand": _obj_get(smart_info, "brand") if smart_info else None,
+            "description": _obj_get(smart_info, "description") if smart_info else None,
+            "movements": movements,
+            "media": media,
+        }
+
+    async def updateItem(self, item_id: int, updates: Mapping[str, Any] | Any) -> dict[str, Any]:
+        data = _as_dict(updates)
+        if "note" not in data:
+            raise InvalidRequestError("Нет полей для обновления")
+
+        note_raw = data.get("note")
+        note = note_raw.strip() if isinstance(note_raw, str) and note_raw.strip() else None
+
+        row = await self.inventoryPool.fetchrow(
+            """
+            UPDATE inventory.items
+            SET note = $1,
+                updated_at = NOW()
+            WHERE id = $2
+            RETURNING id, smart, state, box_number, note, created_at, updated_at
+            """,
+            note,
+            item_id,
+        )
+        if row is None:
+            raise InvalidRequestError("Item not found")
+
+        iid = toInt(_obj_get(row, "id"))
+        smart_code = cast(str, _obj_get(row, "smart"))
+        smart_info = self.smartCache.getBySmart(smart_code)
+        return {
+            "id": iid,
+            "itemCode": formatItemCode(iid),
+            "smart": smart_code,
+            "state": _obj_get(row, "state"),
+            "boxNumber": _obj_get(row, "box_number"),
+            "note": _obj_get(row, "note"),
+            "createdAt": toDateIso(_obj_get(row, "created_at")),
+            "updatedAt": toDateIso(_obj_get(row, "updated_at")),
+            "articles": _obj_get(smart_info, "articles") if smart_info else [],
+            "name": _obj_get(smart_info, "name") if smart_info else None,
+            "brand": _obj_get(smart_info, "brand") if smart_info else None,
+            "description": _obj_get(smart_info, "description") if smart_info else None,
         }
 
     async def getTotalStockBySmartBatch(self, smartCodes: list[str]) -> dict[str, int]:
@@ -1379,8 +1794,9 @@ class DatabaseStorage:
               GROUP BY smart
             ),
             stock_summary AS (
-              SELECT smart, SUM(qty_delta) as current_stock
-              FROM inventory.movements
+              SELECT smart, COUNT(*)::int as current_stock
+              FROM inventory.items
+              WHERE state = 'in_stock'
               GROUP BY smart
             )
             SELECT
@@ -1389,8 +1805,8 @@ class DatabaseStorage:
               s.last_sale_date,
               s.total_sales
             FROM sales_summary s
-            JOIN stock_summary st ON st.smart = s.smart
-            WHERE st.current_stock = 0
+            LEFT JOIN stock_summary st ON st.smart = s.smart
+            WHERE COALESCE(st.current_stock, 0) = 0
             ORDER BY s.last_sale_date DESC
             """
         )
@@ -1430,8 +1846,9 @@ class DatabaseStorage:
             ),
             self.inventoryPool.fetch(
                 """
-                SELECT smart, COALESCE(SUM(qty_delta), 0) as current_stock
-                FROM inventory.movements
+                SELECT smart, COUNT(*)::int as current_stock
+                FROM inventory.items
+                WHERE state = 'in_stock'
                 GROUP BY smart
                 """
             ),
@@ -1777,7 +2194,28 @@ class DatabaseStorage:
             qty = toInt(item_dict.get("qty"))
             sale_price = requireNonNegativeNumberString(item_dict.get("salePrice"), "Цена продажи")
             box_number = requireBoxName(item_dict.get("boxNumber"), "Номер коробки")
-            normalized_items.append({"smart": smart, "qty": qty, "salePrice": sale_price, "boxNumber": box_number})
+            item_ids_raw = item_dict.get("itemIds")
+            item_ids: list[int] | None = None
+            if isinstance(item_ids_raw, list):
+                parsed: list[int] = []
+                for raw in item_ids_raw:
+                    val = toInt(raw)
+                    if val > 0:
+                        parsed.append(val)
+                # De-duplicate while keeping order.
+                uniq: list[int] = []
+                seen: set[int] = set()
+                for v in parsed:
+                    if v in seen:
+                        continue
+                    seen.add(v)
+                    uniq.append(v)
+                if len(uniq) > 0:
+                    item_ids = uniq
+
+            normalized_items.append(
+                {"smart": smart, "qty": qty, "salePrice": sale_price, "boxNumber": box_number, "itemIds": item_ids}
+            )
 
         for item in normalized_items:
             if item["qty"] <= 0:
@@ -1906,6 +2344,7 @@ class DatabaseStorage:
                             "qty": item["qty"],
                             "salePrice": item["salePrice"],
                             "boxNumber": item["boxNumber"],
+                            "itemIds": item.get("itemIds"),
                         }
                     )
 
@@ -1945,7 +2384,7 @@ class DatabaseStorage:
                 for item in order_items:
                     item_value = toFloat(item["salePrice"]) * toInt(item["qty"])
                     allocated_delivery = (delivery_price_num * item_value) / order_total_value if should_allocate_delivery else 0
-                    await client.execute(
+                    sale_row = await client.fetchrow(
                         """
                         INSERT INTO inventory.movements (
                           smart, qty_delta, reason, note,
@@ -1955,6 +2394,7 @@ class DatabaseStorage:
                           created_at
                         )
                         VALUES ($1,$2,'sale',$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL,NOW())
+                        RETURNING id
                         """,
                         item["smart"],
                         -toInt(item["qty"]),
@@ -1968,6 +2408,91 @@ class DatabaseStorage:
                         order_id,
                         item["id"],
                         shipment_id,
+                    )
+                    if sale_row is None:
+                        raise Exception("Sale movement not created")
+
+                    sale_movement_id = toInt(_obj_get(sale_row, "id"))
+                    qty = toInt(item["qty"])
+                    smart = cast(str, item["smart"])
+                    box = cast(str, item["boxNumber"])
+
+                    # Choose concrete instances. If itemIds are provided by frontend, validate and lock them.
+                    item_ids: list[int]
+                    requested_ids = item.get("itemIds")
+                    if isinstance(requested_ids, list) and len(requested_ids) > 0:
+                        if len(requested_ids) != qty:
+                            raise InvalidRequestError(
+                                f"Выбрано неправильное количество экземпляров для {smart} из {box}: "
+                                f"нужно {qty}, выбрано {len(requested_ids)}"
+                            )
+                        locked_rows = await client.fetch(
+                            """
+                            SELECT id, smart, box_number, state
+                            FROM inventory.items
+                            WHERE id = ANY($1::bigint[])
+                            FOR UPDATE
+                            """,
+                            requested_ids,
+                        )
+                        if len(locked_rows) != qty:
+                            raise InvalidRequestError("Некоторые выбранные экземпляры не найдены")
+                        item_ids = []
+                        for r in locked_rows:
+                            rid = toInt(_obj_get(r, "id"))
+                            rsmart = cast(str, _obj_get(r, "smart"))
+                            rbox = cast(str, _obj_get(r, "box_number"))
+                            rstate = cast(str, _obj_get(r, "state"))
+                            if rsmart != smart:
+                                raise InvalidRequestError("Выбранный экземпляр относится к другому SMART")
+                            if rbox != box:
+                                raise InvalidRequestError("Выбранный экземпляр находится в другой коробке")
+                            if rstate != "in_stock":
+                                raise InvalidRequestError("Выбранный экземпляр не находится на складе")
+                            item_ids.append(rid)
+                    else:
+                        picked_rows = await client.fetch(
+                            """
+                            SELECT id
+                            FROM inventory.items
+                            WHERE smart = $1
+                              AND box_number = $2
+                              AND state = 'in_stock'
+                            ORDER BY id ASC
+                            LIMIT $3
+                            FOR UPDATE
+                            """,
+                            smart,
+                            box,
+                            qty,
+                        )
+                        item_ids = [toInt(_obj_get(r, "id")) for r in picked_rows]
+                        if len(item_ids) < qty:
+                            available = await self.getCurrentBoxStockTx(client, smart, box)
+                            raise InsufficientBoxStockError(smart, box, available, qty)
+
+                    await client.execute(
+                        """
+                        UPDATE inventory.items
+                        SET state = 'sold',
+                            box_number = NULL,
+                            sold_movement_id = $1,
+                            written_off_movement_id = NULL,
+                            last_movement_id = $1,
+                            updated_at = NOW()
+                        WHERE id = ANY($2::bigint[])
+                        """,
+                        sale_movement_id,
+                        item_ids,
+                    )
+
+                    await client.execute(
+                        """
+                        INSERT INTO inventory.movement_items (movement_id, item_id)
+                        SELECT $1, UNNEST($2::bigint[])
+                        """,
+                        sale_movement_id,
+                        item_ids,
                     )
 
                 await client.execute("COMMIT")
@@ -2217,6 +2742,50 @@ class DatabaseStorage:
                 "description": _obj_get(smart_info, "description"),
             }
             item_by_id[toInt(_obj_get(row, "id"))] = item
+
+        # Instance-level traceability for returns: which concrete items were sold in this order.
+        sold_items_by_order_item: dict[int, list[dict[str, Any]]] = {}
+        order_item_ids = list(item_by_id.keys())
+        if order_item_ids:
+            sold_rows = await self.inventoryPool.fetch(
+                """
+                SELECT
+                  m.order_item_id,
+                  i.id as item_id,
+                  i.state,
+                  i.box_number,
+                  i.note,
+                  i.created_at,
+                  i.updated_at
+                FROM inventory.movements m
+                JOIN inventory.movement_items mi ON mi.movement_id = m.id
+                JOIN inventory.items i ON i.id = mi.item_id
+                WHERE m.order_id = $1
+                  AND m.reason = 'sale'
+                  AND m.order_item_id = ANY($2::int[])
+                ORDER BY m.order_item_id ASC, i.id ASC
+                """,
+                order_id,
+                order_item_ids,
+            )
+            for row in sold_rows:
+                order_item_id = toInt(_obj_get(row, "order_item_id"))
+                item_id = toInt(_obj_get(row, "item_id"))
+                sold_items_by_order_item.setdefault(order_item_id, []).append(
+                    {
+                        "id": item_id,
+                        "itemCode": formatItemCode(item_id),
+                        "smart": _obj_get(item_by_id.get(order_item_id), "smart"),
+                        "state": _obj_get(row, "state"),
+                        "boxNumber": _obj_get(row, "box_number"),
+                        "note": _obj_get(row, "note"),
+                        "createdAt": toDateIso(_obj_get(row, "created_at")),
+                        "updatedAt": toDateIso(_obj_get(row, "updated_at")),
+                    }
+                )
+
+        for order_item_id, item in item_by_id.items():
+            item["soldItems"] = sold_items_by_order_item.get(order_item_id, [])
         items = list(item_by_id.values())
 
         shipment_items_by_shipment: dict[int, list[dict[str, Any]]] = {}
@@ -2459,14 +3028,33 @@ class DatabaseStorage:
                 already_returned_map = {toInt(_obj_get(row, "order_item_id")): toInt(_obj_get(row, "returned_qty")) for row in returned_rows}
 
                 normalized_items: list[dict[str, Any]] = []
+                used_item_ids: set[int] = set()
                 for item in items:
                     item_dict = _as_dict(item)
                     order_item_id = toInt(item_dict.get("orderItemId"))
                     qty = toInt(item_dict.get("qty"))
                     box_number = requireBoxName(item_dict.get("boxNumber"), "Номер коробки")
                     box_number = await self.requireActiveBoxNameTx(client, box_number, "Номер коробки")
+                    item_ids_raw = item_dict.get("itemIds")
+                    if not isinstance(item_ids_raw, list) or len(item_ids_raw) == 0:
+                        raise InvalidRequestError(
+                            "Для возврата нужно выбрать конкретные экземпляры (itemIds), чтобы вернуть ту же самую запчасть"
+                        )
+                    item_ids: list[int] = []
+                    for raw in item_ids_raw:
+                        val = toInt(raw)
+                        if val <= 0:
+                            continue
+                        if val in used_item_ids:
+                            raise InvalidRequestError("Один и тот же экземпляр выбран дважды")
+                        used_item_ids.add(val)
+                        item_ids.append(val)
                     if qty <= 0:
                         raise InvalidRequestError("Количество возврата должно быть положительным")
+                    if len(item_ids) != qty:
+                        raise InvalidRequestError(
+                            f"Выбрано неправильное количество экземпляров для возврата: нужно {qty}, выбрано {len(item_ids)}"
+                        )
                     order_item = item_by_id.get(order_item_id)
                     if order_item is None:
                         raise InvalidRequestError(f"Позиция заказа #{order_item_id} не найдена")
@@ -2477,7 +3065,22 @@ class DatabaseStorage:
                             f"Превышено допустимое количество возврата для {_obj_get(order_item, 'smart')}: "
                             f"можно вернуть максимум {max_qty}"
                         )
-                    normalized_items.append({"orderItemId": order_item_id, "qty": qty, "boxNumber": box_number})
+                    normalized_items.append(
+                        {"orderItemId": order_item_id, "qty": qty, "boxNumber": box_number, "itemIds": item_ids}
+                    )
+
+                sale_rows = await client.fetch(
+                    """
+                    SELECT id, order_item_id
+                    FROM inventory.movements
+                    WHERE order_id = $1
+                      AND reason = 'sale'
+                    """,
+                    order_id,
+                )
+                sale_movement_id_by_order_item_id = {
+                    toInt(_obj_get(row, "order_item_id")): toInt(_obj_get(row, "id")) for row in sale_rows
+                }
 
                 created_return = await client.fetchrow(
                     """
@@ -2503,6 +3106,15 @@ class DatabaseStorage:
                     order_item_id = toInt(item.get("orderItemId"))
                     qty = toInt(item.get("qty"))
                     order_item = item_by_id[order_item_id]
+                    item_ids = cast(list[int], item.get("itemIds") or [])
+                    if len(item_ids) != qty:
+                        raise InvalidRequestError("Внутренняя ошибка: неверный набор экземпляров возврата")
+
+                    sale_movement_id = sale_movement_id_by_order_item_id.get(order_item_id)
+                    if not sale_movement_id:
+                        raise InvalidRequestError(
+                            "Невозможно оформить возврат: продажа была создана до учета по экземплярам (items)"
+                        )
 
                     await client.execute(
                         """
@@ -2514,7 +3126,7 @@ class DatabaseStorage:
                         qty,
                     )
 
-                    await client.execute(
+                    movement_row = await client.fetchrow(
                         """
                         INSERT INTO inventory.movements (
                           smart, qty_delta, reason, note,
@@ -2523,11 +3135,11 @@ class DatabaseStorage:
                           order_id, order_item_id, shipment_id, return_id,
                           created_at
                         )
-                        VALUES ($1, $2, $3, $4, NULL, NULL, NULL, $5, NULL, NULL, NULL, $6, $7, NULL, $8, NOW())
+                        VALUES ($1, $2, 'return', $3, NULL, NULL, NULL, $4, NULL, NULL, NULL, $5, $6, NULL, $7, NOW())
+                        RETURNING id
                         """,
                         _obj_get(order_item, "smart"),
                         qty,
-                        "adjust" if kind == "correction" else "return",
                         note
                         or (
                             f"Корректировка заказа #{order_id}, позиция #{order_item_id}"
@@ -2538,6 +3150,60 @@ class DatabaseStorage:
                         order_id,
                         order_item_id,
                         return_id,
+                    )
+                    if movement_row is None:
+                        raise Exception("Return movement not created")
+                    return_movement_id = toInt(_obj_get(movement_row, "id"))
+
+                    locked_rows = await client.fetch(
+                        """
+                        SELECT id, smart, state, sold_movement_id
+                        FROM inventory.items
+                        WHERE id = ANY($1::bigint[])
+                        FOR UPDATE
+                        """,
+                        item_ids,
+                    )
+                    if len(locked_rows) != len(item_ids):
+                        raise InvalidRequestError("Некоторые выбранные экземпляры не найдены")
+
+                    for row in locked_rows:
+                        iid = toInt(_obj_get(row, "id"))
+                        rsmart = cast(str, _obj_get(row, "smart"))
+                        rstate = cast(str, _obj_get(row, "state"))
+                        rsold_movement_id = toInt(_obj_get(row, "sold_movement_id"))
+                        if rsmart != cast(str, _obj_get(order_item, "smart")):
+                            raise InvalidRequestError("Выбранный экземпляр относится к другому SMART")
+                        if rstate != "sold":
+                            raise InvalidRequestError(f"Экземпляр {formatItemCode(iid)} не находится в статусе sold")
+                        if rsold_movement_id != sale_movement_id:
+                            raise InvalidRequestError(
+                                f"Экземпляр {formatItemCode(iid)} не относится к этой продаже (позиции заказа)"
+                            )
+
+                    await client.execute(
+                        """
+                        UPDATE inventory.items
+                        SET state = 'in_stock',
+                            box_number = $1,
+                            sold_movement_id = NULL,
+                            written_off_movement_id = NULL,
+                            last_movement_id = $2,
+                            updated_at = NOW()
+                        WHERE id = ANY($3::bigint[])
+                        """,
+                        item.get("boxNumber"),
+                        return_movement_id,
+                        item_ids,
+                    )
+
+                    await client.execute(
+                        """
+                        INSERT INTO inventory.movement_items (movement_id, item_id)
+                        SELECT $1, UNNEST($2::bigint[])
+                        """,
+                        return_movement_id,
+                        item_ids,
                     )
 
                 await client.execute("COMMIT")
