@@ -34,16 +34,13 @@ class ApiLoggingMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api"):
             return response
 
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
-
-        headers = dict(response.headers)
-        content_type = headers.get("content-type", "")
+        content_type = response.headers.get("content-type", "")
         captured_json: Any | None = None
         if content_type.startswith("application/json"):
+            body = getattr(response, "body", None)
             try:
-                captured_json = json.loads(body.decode("utf-8"))
+                if isinstance(body, (bytes, bytearray)):
+                    captured_json = json.loads(bytes(body).decode("utf-8"))
             except Exception:
                 captured_json = None
 
@@ -54,14 +51,7 @@ class ApiLoggingMiddleware(BaseHTTPMiddleware):
         if len(log_line) > 80:
             log_line = log_line[:79] + "…"
         log(log_line)
-
-        return Response(
-            content=body,
-            status_code=response.status_code,
-            headers=headers,
-            media_type=response.media_type,
-            background=response.background,
-        )
+        return response
 
 
 app = FastAPI()

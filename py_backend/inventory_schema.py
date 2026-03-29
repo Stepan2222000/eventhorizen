@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import asyncpg
 
 from .normalization import normalize_box_name
@@ -55,9 +57,22 @@ def _as_str(value: object) -> str | None:
     return text or None
 
 
+def _sanitize_box_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    text = text.replace("/", "-")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 50:
+        text = text[:50].strip()
+    return text or None
+
+
 async def _ensure_box_exists_active(conn: asyncpg.Connection, name: str) -> str:
     """Ensure box exists in registry and is active. Returns the canonical name."""
-    name = name.strip()
+    name = _sanitize_box_name(name) or MIGRATION_UNKNOWN_BOX
     norm = normalize_box_name(name)
     if not norm:
         raise RuntimeError(f"Invalid box name for migration: {name!r}")
@@ -496,7 +511,7 @@ async def _migrate_legacy_movements_to_items_if_needed(conn: asyncpg.Connection)
             if sale_movement_id:
                 picked_ids = await _pick_sold_ids_for_return_from_sale(sale_movement_id, qty_delta)
 
-            if picked_ids:
+            if len(picked_ids) == qty_delta:
                 await conn.execute(
                     """
                     UPDATE inventory.items
@@ -521,6 +536,8 @@ async def _migrate_legacy_movements_to_items_if_needed(conn: asyncpg.Connection)
                     picked_ids,
                 )
             else:
+                # If we cannot pick ALL expected sold items, fallback to inbound correction.
+                # Partial linkage would break sanity checks and startup.
                 # Legacy return where the sale cannot be mapped to items (e.g. sale had no box).
                 # Treat as an inbound correction into the specified box.
                 await conn.execute(
@@ -726,6 +743,9 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
     tx = conn.transaction()
     await tx.start()
     try:
+        # Advisory lock prevents concurrent DDL from parallel workers/processes.
+        # Lock is released automatically when the transaction commits/rolls back.
+        await conn.execute("SELECT pg_advisory_xact_lock(8675309)")
         await conn.execute("CREATE SCHEMA IF NOT EXISTS inventory")
 
         # Reasons are now constants in shared/schema.ts (REASONS), no DB table needed.
@@ -751,9 +771,75 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
 
         await conn.execute(
             """
-            DELETE FROM inventory.shipping_methods a
-            USING inventory.shipping_methods b
-            WHERE a.id > b.id AND a.name = b.name
+            WITH dup AS (
+              SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
+              FROM inventory.shipping_methods
+            )
+            UPDATE inventory.movements m
+            SET shipping_method_id = d.keep_id
+            FROM dup d
+            WHERE m.shipping_method_id = d.id
+              AND d.id <> d.keep_id
+            """
+        )
+        await conn.execute(
+            """
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'inventory'
+                  AND table_name = 'shipments'
+              ) THEN
+                WITH dup AS (
+                  SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
+                  FROM inventory.shipping_methods
+                )
+                UPDATE inventory.shipments s
+                SET shipping_method_id = d.keep_id
+                FROM dup d
+                WHERE s.shipping_method_id = d.id
+                  AND d.id <> d.keep_id;
+              END IF;
+            END
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'inventory'
+                  AND table_name = 'returns'
+              ) THEN
+                WITH dup AS (
+                  SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
+                  FROM inventory.shipping_methods
+                )
+                UPDATE inventory.returns r
+                SET shipping_method_id = d.keep_id
+                FROM dup d
+                WHERE r.shipping_method_id = d.id
+                  AND d.id <> d.keep_id;
+              END IF;
+            END
+            $$;
+            """
+        )
+        await conn.execute(
+            """
+            WITH dup AS (
+              SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
+              FROM inventory.shipping_methods
+            )
+            DELETE FROM inventory.shipping_methods sm
+            USING dup d
+            WHERE sm.id = d.id
+              AND d.id <> d.keep_id
             """
         )
 
@@ -909,7 +995,8 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
                 ALTER TABLE inventory.items
                   ADD CONSTRAINT items_box_number_fkey
                   FOREIGN KEY (box_number)
-                  REFERENCES inventory.boxes(name);
+                  REFERENCES inventory.boxes(name)
+                  NOT VALID;
               END IF;
             END
             $$;
@@ -948,6 +1035,14 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
         await conn.execute("CREATE INDEX IF NOT EXISTS items_state_idx ON inventory.items (state)")
         await conn.execute("CREATE INDEX IF NOT EXISTS items_sold_movement_idx ON inventory.items (sold_movement_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS items_last_movement_idx ON inventory.items (last_movement_id)")
+        # Hot path: pick N in-stock instances from a specific box (sale/writeoff/transfer).
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS items_in_stock_smart_box_id_idx
+            ON inventory.items (smart, box_number, id)
+            WHERE state = 'in_stock'
+            """
+        )
 
         # Link items to movements (operation -> concrete instances).
         await conn.execute(
@@ -1005,7 +1100,7 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
             """
         )
 
-        # Seed boxes from historical movements (idempotent).
+        # Seed boxes from historical movements/items (idempotent).
         existing_box_rows = await conn.fetch("SELECT name_norm, name FROM inventory.boxes")
         existing_by_norm = {str(r.get("name_norm")): str(r.get("name")) for r in existing_box_rows}
 
@@ -1018,28 +1113,62 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
             GROUP BY box_number
             """
         )
+        item_box_rows = await conn.fetch(
+            """
+            SELECT box_number, COUNT(*)::bigint AS cnt
+            FROM inventory.items
+            WHERE box_number IS NOT NULL
+              AND LENGTH(TRIM(box_number)) > 0
+            GROUP BY box_number
+            """
+        )
 
-        variants_by_norm: dict[str, list[tuple[str, int]]] = {}
-        for row in movement_box_rows:
-            raw = str(row.get("box_number") or "").strip()
+        variants_by_norm: dict[str, list[tuple[str, str, int]]] = {}
+        for row in [*movement_box_rows, *item_box_rows]:
+            original = str(row.get("box_number") or "").strip()
+            if not original:
+                continue
+            raw = _sanitize_box_name(original)
             if not raw:
                 continue
             norm = normalize_box_name(raw)
             if not norm:
                 continue
-            variants_by_norm.setdefault(norm, []).append((raw, int(row.get("cnt") or 0)))
+            variants_by_norm.setdefault(norm, []).append((original, raw, int(row.get("cnt") or 0)))
 
         canonical_by_norm: dict[str, str] = {}
         for norm, variants in variants_by_norm.items():
             existing_name = existing_by_norm.get(norm)
             if existing_name:
+                sanitized_existing = _sanitize_box_name(existing_name)
+                if sanitized_existing and sanitized_existing != existing_name:
+                    try:
+                        await conn.execute(
+                            "UPDATE inventory.boxes SET name = $1 WHERE name_norm = $2",
+                            sanitized_existing,
+                            norm,
+                        )
+                        await conn.execute(
+                            "UPDATE inventory.movements SET box_number = $1 WHERE box_number = $2",
+                            sanitized_existing,
+                            existing_name,
+                        )
+                        await conn.execute(
+                            "UPDATE inventory.items SET box_number = $1 WHERE box_number = $2",
+                            sanitized_existing,
+                            existing_name,
+                        )
+                        existing_name = sanitized_existing
+                    except Exception:
+                        # Keep original name if rename conflicts.
+                        pass
                 canonical_by_norm[norm] = existing_name
                 continue
 
             # Choose a canonical display name deterministically:
             # most frequent variant first, then lexicographically.
-            variants_sorted = sorted(variants, key=lambda v: (-v[1], v[0]))
-            canonical = variants_sorted[0][0]
+            variants_sorted = sorted(variants, key=lambda v: (-v[2], v[1]))
+            canonical = _sanitize_box_name(variants_sorted[0][1]) or MIGRATION_UNKNOWN_BOX
             await conn.execute(
                 """
                 INSERT INTO inventory.boxes (name, name_norm, description, is_active, created_at)
@@ -1056,11 +1185,16 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
             canonical = canonical_by_norm.get(norm)
             if not canonical:
                 continue
-            for variant, _cnt in variants:
+            for variant, _sanitized, _cnt in variants:
                 if variant == canonical:
                     continue
                 await conn.execute(
                     "UPDATE inventory.movements SET box_number = $1 WHERE box_number = $2",
+                    canonical,
+                    variant,
+                )
+                await conn.execute(
+                    "UPDATE inventory.items SET box_number = $1 WHERE box_number = $2",
                     canonical,
                     variant,
                 )
@@ -1187,6 +1321,114 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
         )
 
         await conn.execute(
+            f"""
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'items_state_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.items
+                  ADD CONSTRAINT items_state_chk
+                  CHECK (state IN ({", ".join(repr(s) for s in _ITEM_STATES)})) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'items_in_stock_box_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.items
+                  ADD CONSTRAINT items_in_stock_box_chk
+                  CHECK (
+                    (state = 'in_stock' AND box_number IS NOT NULL AND LENGTH(TRIM(box_number)) > 0)
+                    OR
+                    (state <> 'in_stock' AND (box_number IS NULL OR LENGTH(TRIM(box_number)) = 0))
+                  ) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'items_sold_movement_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.items
+                  ADD CONSTRAINT items_sold_movement_chk
+                  CHECK (
+                    (state <> 'sold' AND sold_movement_id IS NULL)
+                    OR
+                    (state = 'sold' AND sold_movement_id IS NOT NULL)
+                  ) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'items_written_off_movement_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.items
+                  ADD CONSTRAINT items_written_off_movement_chk
+                  CHECK (
+                    (state <> 'written_off' AND written_off_movement_id IS NULL)
+                    OR
+                    (state = 'written_off' AND written_off_movement_id IS NOT NULL)
+                  ) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'shipments_status_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.shipments
+                  ADD CONSTRAINT shipments_status_chk
+                  CHECK (status IN ('pending', 'shipped', 'delivered')) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'shipments_delivery_payer_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.shipments
+                  ADD CONSTRAINT shipments_delivery_payer_chk
+                  CHECK (delivery_payer IN ('seller', 'buyer') OR delivery_payer IS NULL) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'returns_kind_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.returns
+                  ADD CONSTRAINT returns_kind_chk
+                  CHECK (kind IN ('return', 'correction')) NOT VALID;
+              END IF;
+
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'returns_return_payer_chk'
+                  AND connamespace = 'inventory'::regnamespace
+              ) THEN
+                ALTER TABLE inventory.returns
+                  ADD CONSTRAINT returns_return_payer_chk
+                  CHECK (return_payer IN ('seller', 'buyer') OR return_payer IS NULL) NOT VALID;
+              END IF;
+            END
+            $$;
+            """
+        )
+
+        await conn.execute(
             """
             DO $$
             BEGIN
@@ -1297,6 +1539,20 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_reason_idx ON inventory.movements (reason)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_created_at_idx ON inventory.movements (created_at DESC)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_box_number_idx ON inventory.movements (box_number)")
+        # Common history queries: SMART+reason (purchases/sales) and box history.
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS movements_smart_reason_created_at_id_idx
+            ON inventory.movements (smart, reason, created_at DESC, id DESC)
+            """
+        )
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS movements_box_number_created_at_id_idx
+            ON inventory.movements (box_number, created_at DESC, id DESC)
+            WHERE box_number IS NOT NULL
+            """
+        )
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_linked_movement_id_idx ON inventory.movements (linked_movement_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_sale_status_idx ON inventory.movements (sale_status)")
         await conn.execute("CREATE INDEX IF NOT EXISTS movements_order_id_idx ON inventory.movements (order_id)")

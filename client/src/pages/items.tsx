@@ -31,12 +31,12 @@ function fetchItems(params: Record<string, string>) {
   return fetch(url.toString(), { credentials: "include" }).then(async (res) => {
     const text = await res.text();
     if (!res.ok) {
+      let message = text || res.statusText;
       try {
         const json = JSON.parse(text);
-        throw new Error(json.error || json.message || text);
-      } catch {
-        throw new Error(text || res.statusText);
-      }
+        message = json.error || json.message || text;
+      } catch { /* not JSON, use raw text */ }
+      throw new Error(message);
     }
     return JSON.parse(text) as ItemsResponse;
   });

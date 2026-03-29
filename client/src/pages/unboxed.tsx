@@ -21,7 +21,7 @@ type UnboxedRow = {
 export default function UnboxedPage() {
   const [filter, setFilter] = useState("");
 
-  const { data = [], isLoading } = useQuery<UnboxedRow[]>({
+  const { data = [], isLoading, isError, error } = useQuery<UnboxedRow[]>({
     queryKey: ["/api/unboxed"],
   });
 
@@ -82,6 +82,12 @@ export default function UnboxedPage() {
                   <TableRow>
                     <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
                       Загрузка...
+                    </TableCell>
+                  </TableRow>
+                ) : isError ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-8 text-center text-destructive">
+                      {error instanceof Error ? error.message : "Не удалось загрузить данные"}
                     </TableCell>
                   </TableRow>
                 ) : filtered.length === 0 ? (

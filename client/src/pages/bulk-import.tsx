@@ -28,7 +28,13 @@ export default function BulkImport() {
       });
       
       if (!response.ok) {
-        throw new Error(await response.text());
+        const text = await response.text();
+        let message = text || response.statusText;
+        try {
+          const json = JSON.parse(text);
+          message = json.error || json.message || text;
+        } catch { /* not JSON, use raw text */ }
+        throw new Error(message);
       }
       
       return response.json();
@@ -55,7 +61,8 @@ export default function BulkImport() {
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
-      
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
+
       if (result.imported > 0) {
         toast({
           title: "Импорт завершён",

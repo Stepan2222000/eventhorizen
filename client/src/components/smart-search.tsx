@@ -12,6 +12,10 @@ export type SmartSearchProps = {
   onClear?: () => void;
   /** Начальное значение инпута (для prefill). Сброс через key prop. */
   defaultValue?: string;
+  /** Контролируемое значение инпута */
+  value?: string;
+  /** Вызывается при любом изменении текста */
+  onValueChange?: (value: string) => void;
   /** Placeholder текст */
   placeholder?: string;
   /** Лимит результатов API */
@@ -32,6 +36,8 @@ export function SmartSearch({
   onSelect,
   onClear,
   defaultValue,
+  value,
+  onValueChange,
   placeholder = "Артикул или SMART...",
   limit = 10,
   showName = true,
@@ -44,6 +50,7 @@ export function SmartSearch({
   const [isOpen, setIsOpen] = useState(false);
   const [results, setResults] = useState<ArticleSearchResult[]>([]);
   const [selectedItem, setSelectedItem] = useState<ArticleSearchResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -56,11 +63,22 @@ export function SmartSearch({
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof value !== "string") return;
+    setInputValue(value);
+    if (!value.trim()) {
+      setSelectedItem(null);
+      setResults([]);
+      setIsOpen(false);
+    }
+  }, [value]);
+
   const performSearch = async (query: string) => {
     const q = query.trim();
     if (q.length < 2) {
       setResults([]);
       setIsOpen(false);
+      setErrorMessage(null);
       return;
     }
 
@@ -79,17 +97,23 @@ export function SmartSearch({
       }
       const data = (await res.json()) as ArticleSearchResult[];
       setResults(data);
-      setIsOpen(data.length > 0);
+      const hasFocus = document.activeElement === inputRef.current;
+      setIsOpen(data.length > 0 && hasFocus);
+      setErrorMessage(null);
     } catch (err: any) {
       if (err?.name === "AbortError") return;
+      const message = err instanceof Error ? err.message : "Ошибка поиска";
       console.error("SmartSearch error:", err);
       setResults([]);
       setIsOpen(false);
+      setErrorMessage(message);
     }
   };
 
   const handleInputChange = (value: string) => {
     setInputValue(value);
+    onValueChange?.(value);
+    setErrorMessage(null);
 
     if (selectedItem) {
       setSelectedItem(null);
@@ -99,8 +123,10 @@ export function SmartSearch({
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     if (!value.trim()) {
+      abortRef.current?.abort();
       setResults([]);
       setIsOpen(false);
+      onClear?.();
       return;
     }
 
@@ -110,16 +136,21 @@ export function SmartSearch({
   const handleSelect = (item: ArticleSearchResult) => {
     setSelectedItem(item);
     setInputValue(item.smart);
+    onValueChange?.(item.smart);
     setIsOpen(false);
     setResults([]);
+    setErrorMessage(null);
     onSelect(item);
   };
 
   const handleClear = () => {
+    abortRef.current?.abort();
     setInputValue("");
+    onValueChange?.("");
     setSelectedItem(null);
     setResults([]);
     setIsOpen(false);
+    setErrorMessage(null);
     onClear?.();
     inputRef.current?.focus();
   };
@@ -161,7 +192,7 @@ export function SmartSearch({
         >
           <Command shouldFilter={false}>
             <CommandList>
-              <CommandEmpty>Ничего не найдено</CommandEmpty>
+              <CommandEmpty>{errorMessage ? `Ошибка: ${errorMessage}` : "Ничего не найдено"}</CommandEmpty>
               <CommandGroup heading="Найденные позиции">
                 {results.map((result, idx) => (
                   <CommandItem
@@ -217,6 +248,9 @@ export function SmartSearch({
             </div>
           )}
         </div>
+      )}
+      {!showSelectedInfo && errorMessage && (
+        <div className="mt-2 text-xs text-destructive">{errorMessage}</div>
       )}
     </div>
   );

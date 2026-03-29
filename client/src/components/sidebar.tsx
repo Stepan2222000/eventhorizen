@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   BarChart3,
@@ -53,6 +54,12 @@ const navigation: NavItem[] = [
 
 export function AppSidebar({ className, ...props }: React.ComponentProps<typeof Sidebar>) {
   const [location] = useLocation();
+  const { data: dbHealth, isLoading: dbLoading } = useQuery<{ connected: boolean }>({
+    queryKey: ["/api/health/db"],
+    refetchInterval: 15_000,
+    retry: false,
+  });
+  const dbConnected = dbHealth?.connected === true;
 
   return (
     <Sidebar
@@ -129,16 +136,30 @@ export function AppSidebar({ className, ...props }: React.ComponentProps<typeof 
         <SidebarSeparator />
         <div className="rounded-xl border bg-gradient-to-b from-muted/40 to-transparent px-3 py-2 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="relative flex size-8 items-center justify-center rounded-lg bg-success/10 text-success ring-1 ring-success/20">
+            <div
+              className={cn(
+                "relative flex size-8 items-center justify-center rounded-lg ring-1",
+                dbConnected
+                  ? "bg-success/10 text-success ring-success/20"
+                  : "bg-destructive/10 text-destructive ring-destructive/20"
+              )}
+            >
               <DatabaseZap className="size-4" />
               <span className="absolute -right-0.5 -top-0.5 flex size-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-40" />
-                <span className="relative inline-flex size-2 rounded-full bg-success" />
+                <span
+                  className={cn(
+                    "absolute inline-flex h-full w-full animate-ping rounded-full opacity-40",
+                    dbConnected ? "bg-success" : "bg-destructive"
+                  )}
+                />
+                <span className={cn("relative inline-flex size-2 rounded-full", dbConnected ? "bg-success" : "bg-destructive")} />
               </span>
             </div>
             <div className="min-w-0">
               <div className="text-[11px] leading-4 text-muted-foreground">Статус БД</div>
-              <div className="truncate font-mono text-xs font-medium text-foreground">Подключено</div>
+              <div className="truncate font-mono text-xs font-medium text-foreground">
+                {dbLoading ? "Проверка..." : dbConnected ? "Подключено" : "Нет соединения"}
+              </div>
             </div>
           </div>
         </div>

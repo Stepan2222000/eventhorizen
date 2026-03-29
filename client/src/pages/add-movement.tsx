@@ -109,8 +109,7 @@ export default function AddMovement() {
   const queryClient = useQueryClient();
 
   const [searchKey, setSearchKey] = useState(0);
-
-  const prefillSmart = new URLSearchParams(window.location.search).get("smart") ?? undefined;
+  const [prefillSmart, setPrefillSmart] = useState<string>(() => new URLSearchParams(window.location.search).get("smart") || "");
 
   const clearPrefillParamsFromUrl = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -126,7 +125,7 @@ export default function AddMovement() {
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      smart: prefillSmart || "",
+      smart: "",
       qtyDelta: 0,
       reason: undefined as any,
       note: "",
@@ -145,13 +144,14 @@ export default function AddMovement() {
   // Show toast for URL prefill on mount.
   useEffect(() => {
     if (prefillSmart) {
+      form.setValue("smart", prefillSmart, { shouldValidate: true });
       toast({
         title: "SMART код загружен",
         description: `Предзаполнено из URL: ${prefillSmart}`,
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [prefillSmart]);
 
   const { data: reasons } = useQuery<Reason[]>({
     queryKey: ["/api/reasons"],
@@ -186,6 +186,10 @@ export default function AddMovement() {
     if (selectedReason === "transfer") {
       form.setValue("fromBox", null);
       form.setValue("toBox", null);
+      return;
+    }
+    if (selectedReason === "writeoff") {
+      form.setValue("boxNumber", null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSmart]);
@@ -241,8 +245,23 @@ export default function AddMovement() {
   }, [selectedReason, form]);
 
   const resetForm = () => {
-    form.reset();
+    form.reset({
+      smart: "",
+      qtyDelta: 0,
+      reason: undefined as any,
+      note: "",
+      purchasePrice: null,
+      salePrice: null,
+      deliveryPrice: null,
+      boxNumber: null,
+      fromBox: null,
+      toBox: null,
+      trackNumber: null,
+      shippingMethodId: null,
+      saleStatus: null,
+    });
     setSearchKey((k) => k + 1);
+    setPrefillSmart("");
     clearPrefillParamsFromUrl();
   };
 
@@ -282,6 +301,7 @@ export default function AddMovement() {
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=profit`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=sales`] });
       queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
 
       toast({
         title: variables.reason === "transfer" ? "Перемещение выполнено" : "Движение записано",
@@ -347,7 +367,11 @@ export default function AddMovement() {
                     <div className="mt-2">
                       <SmartSearch
                         key={searchKey}
+                        value={form.watch("smart") || ""}
                         defaultValue={prefillSmart}
+                        onValueChange={(value) => {
+                          form.setValue("smart", value, { shouldValidate: true });
+                        }}
                         onSelect={(item) => {
                           form.setValue("smart", item.smart, { shouldValidate: true });
                         }}

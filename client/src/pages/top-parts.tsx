@@ -13,7 +13,7 @@ type RankingMode = 'profit' | 'sales' | 'combined';
 export default function TopParts() {
   const [mode, setMode] = useState<RankingMode>('combined');
 
-  const { data: items, isLoading } = useQuery<TopPart[]>({
+  const { data: items, isLoading, isError, error } = useQuery<TopPart[]>({
     queryKey: [`/api/top-parts?mode=${mode}`],
   });
 
@@ -25,6 +25,18 @@ export default function TopParts() {
           <Skeleton className="h-4 w-96" />
           <Skeleton className="h-64 w-full" />
         </div>
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Топ запчастей" description="Рейтинг по доходности и продажам">
+        <Card>
+          <CardContent className="py-10 text-sm text-destructive">
+            {error instanceof Error ? error.message : "Ошибка загрузки рейтинга"}
+          </CardContent>
+        </Card>
       </Page>
     );
   }

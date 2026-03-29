@@ -1,0 +1,352 @@
+meta:
+  target: feature/order-details-page
+  created: 2026-02-11
+  last_updated: 2026-02-11T20:43:09Z
+  agent: validator-1
+  scope_files:
+    - client/src/pages/order-details.tsx
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - shared/schema.ts
+    - lab/orders-system.md
+
+errors:
+  - id: e-order-details-001
+    file: py_backend/storage.py
+    category: spec-mismatch
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При создании глубокой отгрузки с методом "Самовывоз" сервер всё равно
+      создаёт shipment со статусом `pending`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Самовывозные заказы зависают в "ожидает отправки", их можно ошибочно
+      переводить по логистическим статусам как обычную доставку.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      По спецификации `lab/orders-system.md` самовывоз должен сразу иметь
+      статус `delivered` ("получено"), без этапа pending.
+
+    code_example: |
+      # Практика (agent-browser, order #14):
+      # Созданы shipment #22 и #23 методом "Самовывоз"
+      # и в UI/API оба со статусом "Ожидает".
+      # Screenshot: lab/validation/agent-browser-order14-pickup-shipments-pending.png
+
+      # Код сервера:
+      # py_backend/storage.py:3460
+      # VALUES (..., 'pending', NOW(), NOW())
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено практическим созданием самовывозных отгрузок через UI."
+    fix: null
+
+  - id: e-order-details-002
+    file: client/src/pages/order-details.tsx
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В форме "Добавить отгрузку" поле трек-номера всегда видно, даже когда
+      выбран метод "Самовывоз".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь вводит нерелевантный трек для самовывоза, форма вводит
+      в заблуждение и расходится с согласованной UX-логикой.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для самовывоза поле трек-номера должно скрываться или быть disabled.
+
+    code_example: |
+      # Практика:
+      # order #14, выбран "Самовывоз", поле "Трек-номер" остаётся активным.
+      # Screenshots:
+      # - lab/validation/agent-browser-order14-pickup-shipments-pending.png
+      # - lab/validation/agent-browser-order14-create-shipment-stuck.png
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено в e2e при выборе метода доставки."
+    fix: null
+
+  - id: e-order-details-003
+    file: py_backend/storage.py
+    category: state-corruption
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Возврат увеличивает `returnedQty` и переводит экземпляры в `in_stock`,
+      но не корректирует `shipment_items` pending-отгрузок.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Возникает рассинхрон: часть товара уже возвращена на склад, но в pending
+      по-прежнему числится к отправке. Это искажает операционный статус заказа
+      и позволяет ошибочные действия с отгрузками.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При возврате по неотгруженным позициям pending-распределение shipment_items
+      должно уменьшаться (или блокировать такой return без корректной переразбивки).
+
+    code_example: |
+      # Практика (order #14 после return):
+      # qty=12, returnedQty=1, но pending_sum по shipment_items остаётся 12.
+      # Screenshot: lab/validation/agent-browser-order14-after-return-pending-still-12.png
+      # API check:
+      # { "item_qty": 12, "returned_qty": 1, "pending_sum": 12 }
+
+      # Смежный симптом (order #13):
+      # pending shipment остался, но переразбивка падает:
+      # "Недостаточно проданных экземпляров для переразделения отгрузки..."
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено UI + API после практического возврата."
+    fix: null
+
+  - id: e-order-details-004
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Обычный `kind=return` разрешён даже когда позиция ещё не отгружена
+      (`shippedQty=0`, только pending-отгрузки).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Смешиваются две разные бизнес-операции: фактический возврат от клиента
+      и внутренняя корректировка по неотгруженному товару.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для неотгруженных позиций должна использоваться `correction`, а `return`
+      должен быть ограничен отгруженными/полученными товарами.
+
+    code_example: |
+      # Практика:
+      # order #14, при shippedQty=0 создан "Возврат #11" с kind=return.
+      # Note: "agent-browser return on pending"
+      # UI доказательство: История возвратов на /orders/14.
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено практическим созданием возврата на pending-заказе."
+    fix: null
+
+  - id: e-order-details-005
+    file: py_backend/routes.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      PATCH `/api/shipments/{id}/status` принимает любой статус из enum без
+      проверки допустимого перехода.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Статус можно откатывать назад (например delivered -> pending), что ломает
+      жизненный цикл отправки и управленческую отчётность.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужны правила переходов по FSM (минимум запрет назад без спец-права).
+
+    code_example: |
+      # Практика:
+      # shipment #13 успешно переведён PATCH:
+      # delivered -> pending (HTTP 200).
+      #
+      # routes.py:497-500 проверяет только принадлежность к enum,
+      # но не валидирует переход.
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено прямым API-вызовом."
+    fix: null
+
+  - id: e-order-details-006
+    file: py_backend/storage.py
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После мутаций (создание отгрузки/возврата) сервер делает тяжёлый
+      post-commit `getOrderById`, из-за чего ответ может идти десятки секунд.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      На фронте кнопки надолго зависают в "Создание.../Оформление...",
+      пользователь может считать действие "зависшим" и повторять операции.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Отдавать быстрый ответ (минимальный payload) и обновлять детали заказа
+      отдельным refetch, либо оптимизировать сборку OrderDetails.
+
+    code_example: |
+      # Практика:
+      # - "Создать отгрузку" на #14: длительный stuck-стейт.
+      #   Screenshot: lab/validation/agent-browser-order14-create-shipment-stuck.png
+      # - "Оформить возврат" на #14: длительный stuck-стейт.
+      #   Screenshot: lab/validation/agent-browser-order14-return-stuck.png
+      #
+      # storage.py:
+      # - createAdditionalShipmentAttempt(): COMMIT -> getOrderById() (3563-3568)
+      # - createOrderReturnAttempt(): COMMIT -> getOrderById() (3842-3847)
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено e2e: длительные мутации при уже применённых изменениях."
+    fix: null
+
+  - id: e-order-details-007
+    file: py_backend/storage.py
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для нулевой стоимости доставки остаётся `deliveryPayer` (например `buyer`)
+      в карточке отправки.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      UI показывает противоречивую бизнес-семантику ("0.00 ₽, платит buyer"),
+      усложняется аналитика логистики и интерпретация данных.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При deliveryPrice=0 поле payer должно быть null/скрыто по всему контуру.
+
+    code_example: |
+      # Практика:
+      # order #13 и #14, shipment #13/#14:
+      # "Стоимость: 0.00 ₽ · Платит: buyer".
+      #
+      # createAdditionalShipmentAttempt() обнуляет payer только для pickup+0,
+      # но не для других методов с нулевой стоимостью.
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено в UI и API данных заказов."
+    fix: null
+
+  - id: e-order-details-008
+    file: our/algorithms.yaml
+    category: missing-binding
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В репозитории нет `our/algorithms.yaml` и нет `@alg:`-маркеров
+      для потока order-details.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Теряется трассировка "шаг спецификации -> функция/обработчик", сложнее
+      поддерживать и автоматизировать глубокую валидацию.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Добавить шаги для order-details в YAML и привязать их в key-функциях
+      фронтенда и бекенда.
+
+    code_example: |
+      # Проверка:
+      # rg --files -g 'our/*.yaml'           -> пусто
+      # rg -n "@alg:" client/src py_backend  -> пусто
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        agrees: true
+        note: "Подтверждено отдельной проверкой привязок."
+    fix: null
+
+improvements:
+  - id: i-order-details-001
+    file: client/src/pages/order-details.tsx
+    category: kiss-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Компонент `OrderDetailsPage` вырос до ~942 строк и совмещает данные,
+      валидации, мутации и крупный JSX.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Повышается стоимость изменений и риск регрессий при правках
+      статусов/возвратов/отгрузок.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Разделить на хук состояния + подкомпоненты секций карточки заказа.
+
+    code_example: |
+      # Файл: client/src/pages/order-details.tsx (942 строк)
+      # Структурно объединяет:
+      # - useQuery/useMutation
+      # - доменные проверки
+      # - 5+ крупных UI-секций
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        note: "Подтверждено при полном e2e- и кодовом проходе."
+    fix: null
+
+  - id: i-order-details-002
+    file: py_backend/storage.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      После каждой тяжёлой мутации собирается полный OrderDetails в том же
+      HTTP-ответе.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Это увеличивает хвостовую латентность мутаций и создаёт ощущение "зависания"
+      даже когда бизнес-операция уже закоммичена.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Возвращать минимальный payload (id + тип операции), а полные детали
+      подтягивать отдельным GET с кешируемым/оптимизированным путём.
+
+    code_example: |
+      # createAdditionalShipmentAttempt(): COMMIT -> getOrderById()
+      # createOrderReturnAttempt():      COMMIT -> getOrderById()
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:43:09Z
+        note: "Подтверждено практическими задержками мутаций на order-details."
+    fix: null
+

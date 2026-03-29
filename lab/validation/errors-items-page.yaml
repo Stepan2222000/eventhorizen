@@ -1,0 +1,430 @@
+meta:
+  target: client/src/pages/items.tsx
+  created: 2026-02-11
+  last_updated: 2026-02-11T20:44:40Z
+
+errors:
+  - id: e-items-001
+    file: client/src/pages/add-movement.tsx
+    category: state-corruption
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После успешного создания движения страница "Добавить движение" инвалидирует много ключей
+      React Query, но не инвалидирует ключи "/api/items*".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При staleTime=Infinity страница "Экземпляры" остаётся с устаревшими данными
+      (статус, коробка, количество строк по фильтрам) до ручного обновления браузера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Любая мутация, которая меняет inventory.items, должна инвалидировать "/api/items"
+      (и производные ключи), чтобы список экземпляров сразу обновлялся.
+
+    code_example: |
+      # Проблемный код:
+      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      ...
+      # "/api/items" отсутствует
+
+      # Как исправить:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/items"),
+      });
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-fe
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Отсутствует инвалидация /api/items после POST /api/movements и /api/boxes/transfer."
+      - agent: validator-browser
+        timestamp: 2026-02-11T20:44:40Z
+        agrees: true
+        note: |
+          Практический repro через UI (SPA, без reload):
+          1) На /items до операции: top item EH-000086, total=33.
+          2) На /movement создана покупка (toast: "Движение записано").
+          3) Возврат на /items через sidebar: данные остались прежними (EH-000086, total=33).
+          4) После ручного reload: появился EH-000087 и total=34.
+          Это подтверждает stale cache из-за отсутствия invalidate "/api/items*".
+
+    fix: null
+
+  - id: e-items-002
+    file: client/src/pages/stock-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После перемещения между коробками из stock-details обновляются ключи stock/boxes/movements,
+      но не ключи "/api/items*".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В списке "Экземпляры" остаются старые boxNumber до F5, хотя transfer уже выполнен.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Успешный transfer должен инвалидировать "/api/items" так же, как stock/boxes.
+
+    code_example: |
+      # Проблемный код:
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
+        ...
+      }
+
+      # Как исправить:
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-fe
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Transfer меняет physical items, но cache /items не обновляется."
+
+    fix: null
+
+  - id: e-items-003
+    file: client/src/pages/box-details.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В box-details есть как минимум два потока мутаций, меняющих inventory.items
+      (transfer и инвентаризация через adjust), но ни один не инвалидирует "/api/items*".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      После перемещений/инвентаризации пользователь видит устаревшие данные
+      на странице "Экземпляры" (неактуальная коробка/состав).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Оба onSuccess должны инвалидировать "/api/items" в общем наборе invalidate.
+
+    code_example: |
+      # Проблемный код:
+      transferMutation.onSuccess -> invalidate boxes/stock/movements
+      applyInventoryMutation.onSuccess -> invalidate boxes/stock/movements
+      # "/api/items" отсутствует в обоих местах
+
+      # Как исправить:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/items"),
+      });
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-fe
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Обе мутации затрагивают items, но invalidation списка экземпляров отсутствует."
+
+    fix: null
+
+  - id: e-items-004
+    file: client/src/pages/bulk-import.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После bulk-import инвалидируются movements/stock/boxes/unboxed, но не "/api/items*".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Импорт может создать/изменить экземпляры, но страница "Экземпляры" остаётся на старом кеше
+      из-за staleTime=Infinity.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      После успешного импорта должен инвалидироваться и кэш списка экземпляров.
+
+    code_example: |
+      # Проблемный код:
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+        ...
+      }
+
+      # Как исправить:
+      queryClient.invalidateQueries({ queryKey: ["/api/items"] });
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-fe
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "После импорта list /items не рефрешится автоматически."
+
+    fix: null
+
+  - id: e-items-005
+    file: client/src/components/box-selector.tsx
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Компонент BoxSelector для optional-полей не даёт пути выбрать null после выбора коробки.
+      В items.tsx фильтр "Коробка" использует этот компонент как optional ("Все коробки").
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь выбрал коробку и не может вернуться в "Все коробки" без ручного сброса
+      состояния снаружи (на странице такого сброса нет).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для optional режима должен быть явный пункт "Все коробки"/"Сбросить".
+
+    code_example: |
+      # Проблемный код:
+      <CommandGroup ...>
+        {options.map((option) => (
+          <CommandItem onSelect={() => onSelect(option.name)} />
+        ))}
+      </CommandGroup>
+      # onSelect(null) недостижим
+
+      # Как исправить:
+      # Добавить верхний CommandItem для optional режима:
+      # onSelect(null), label = "Все коробки".
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Фильтр коробки на /items становится практически несбрасываемым."
+      - agent: validator-browser
+        timestamp: 2026-02-11T20:44:40Z
+        agrees: true
+        note: |
+          Практический repro: выбран TEST-BOX, затем повторно открыт dropdown.
+          Через agent-browser eval получен список 17 options, hasReset=false
+          (нет "Все коробки"/"Сбросить"). После Escape значение фильтра остаётся "TEST-BOX".
+
+    fix: null
+
+  - id: e-items-006
+    file: client/src/pages/items.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В fetchItems() при !res.ok код бросает Error внутри try, который тут же
+      ловится собственным catch.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Человекочитаемое сообщение из JSON ("error"/"message") теряется.
+      В UI уходит сырой JSON-текст или statusText.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Парсинг JSON должен формировать текст ошибки без throw внутри try,
+      аналогично throwIfResNotOk в queryClient.ts.
+
+    code_example: |
+      # Проблемный код:
+      try {
+        const json = JSON.parse(text);
+        throw new Error(json.error || json.message || text);
+      } catch {
+        throw new Error(text || res.statusText);
+      }
+
+      # Как исправить:
+      # const json = safeParse(text); const msg = json?.error ?? json?.message ?? text;
+      # throw new Error(msg || res.statusText);
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Throw в try блоке всегда попадает в catch и маскирует исходное сообщение."
+
+    fix: null
+
+  - id: e-items-007
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Если boxNumber не найден в inventory.boxes, getItems() возвращает
+      {items: [], total: 0, limit: 0, offset: 0}.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Ответ ломает консистентность пагинации (limit неожиданно 0).
+      Клиент, который использует limit как размер страницы, может работать некорректно.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Даже при пустом результате возвращать валидированные limit/offset,
+      а не нули.
+
+    code_example: |
+      # Проблемный код:
+      if resolved is None:
+          return {"items": [], "total": 0, "limit": 0, "offset": 0}
+
+      # Как исправить:
+      # return {"items": [], "total": 0, "limit": limit, "offset": offset}
+      # после вычисления limit/offset.
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-be
+        timestamp: 2026-02-11T20:19:39Z
+        agrees: true
+        note: "Inconsistent pagination contract при фильтре по неизвестной коробке."
+      - agent: validator-browser
+        timestamp: 2026-02-11T20:44:40Z
+        agrees: true
+        note: |
+          Практический запрос из браузерной сессии:
+          GET /api/items?boxNumber=NON_EXISTENT
+          status=200, body={"items":[],"total":0,"limit":0,"offset":0}
+          Подтверждает неконсистентный pagination contract (limit=0).
+
+    fix: null
+
+improvements:
+  - id: i-items-001
+    file: client/src/pages/add-movement.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Списки invalidateQueries вручную дублируются во многих страницах
+      (add-movement, stock-details, box-details, bulk-import и др.).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Легко пропустить один ключ (как произошло с "/api/items"), что приводит
+      к трудноуловимому stale-кешу.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести invalidate-наборы в общий helper (например invalidateInventoryQueries),
+      чтобы один источник правды покрывал все связанные ключи.
+
+    code_example: |
+      # Текущий код:
+      # 10-15 вызовов queryClient.invalidateQueries(...) в каждом onSuccess.
+
+      # Как улучшить:
+      # invalidateInventoryQueries(queryClient, { smart, includeItems: true })
+
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        note: "Повторяющийся код инвалидации уже привёл к пропускам."
+
+    fix: null
+
+  - id: i-items-002
+    file: client/src/pages/items.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В fetchItems повторяется логика обработки HTTP-ошибок, уже реализованная в queryClient.ts.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Дублирование создаёт расхождения и баги (маскирование сообщения ошибки).
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Использовать общий helper (apiRequest/throwIfResNotOk) и убрать локальный парсер ошибок.
+
+    code_example: |
+      # Текущий код:
+      function fetchItems(...) { fetch(...).then(async (res) => { ... }) }
+
+      # Как улучшить:
+      # Переиспользовать общий throwIfResNotOk и единый формат ошибок.
+
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        note: "Дублирование обработчика ошибок между страницами."
+
+    fix: null
+
+  - id: i-items-003
+    file: client/src/pages/items.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      queryKey использует сырые q/smart, а запрос отправляет trim-значения.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Один и тот же серверный запрос может кэшироваться под разными ключами
+      ("abc" и "abc "), что засоряет кэш и усложняет дебаг stale-данных.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Нормализовать значения до формирования queryKey (использовать trim в ключе).
+
+    code_example: |
+      # Текущий код:
+      queryKey: ["/api/items", q, smart, box, state, offset]
+      fetchItems({ q: q.trim(), smart: smart.trim(), ... })
+
+      # Как улучшить:
+      # const qNorm = q.trim(); const smartNorm = smart.trim();
+      # queryKey: ["/api/items", qNorm, smartNorm, ...]
+
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        note: "Ненужная фрагментация query-кеша."
+
+    fix: null
+
+  - id: i-items-004
+    file: client/src/pages/items.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Поле общего поиска q делает запрос при каждом вводе символа без debounce.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Создаёт лишнюю нагрузку на API и ухудшает UX при медленной сети.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить debounce 250-400 мс (как в SmartSearch) перед изменением queryKey.
+
+    code_example: |
+      # Текущий код:
+      onChange={(e) => setQ(e.target.value)}
+
+      # Как улучшить:
+      # держать локальный input state и дебаунсить обновление q фильтра.
+
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-11T20:19:39Z
+        note: "Без debounce каждый ввод символа вызывает новый network request."
+
+    fix: null

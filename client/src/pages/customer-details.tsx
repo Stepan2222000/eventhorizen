@@ -20,6 +20,13 @@ type CustomerDetailsResponse = {
   };
 };
 
+function parseStrictRouteId(value: string | undefined): number {
+  const text = (value || "").trim();
+  if (!/^\d+$/.test(text)) return Number.NaN;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) ? parsed : Number.NaN;
+}
+
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(value);
 }
@@ -36,11 +43,11 @@ function formatDate(value: string) {
 
 export default function CustomerDetailsPage() {
   const { id } = useParams<{ id: string }>();
-  const customerId = Number.parseInt(id || "", 10);
+  const customerId = parseStrictRouteId(id);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery<CustomerDetailsResponse>({
+  const { data, isLoading, isError, error } = useQuery<CustomerDetailsResponse>({
     queryKey: [`/api/customers/${customerId}`],
     enabled: Number.isFinite(customerId),
   });
@@ -72,7 +79,12 @@ export default function CustomerDetailsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/customers/${customerId}`] });
-      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
       queryClient.invalidateQueries({
         predicate: (query) =>
           Array.isArray(query.queryKey) &&
@@ -102,6 +114,14 @@ export default function CustomerDetailsPage() {
     return (
       <Page title="Клиент" description="Загрузка данных клиента...">
         <p className="text-sm text-muted-foreground">Загрузка данных клиента...</p>
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Клиент" description="Ошибка загрузки клиента">
+        <p className="text-sm text-destructive">{error instanceof Error ? error.message : "Не удалось загрузить клиента"}</p>
       </Page>
     );
   }

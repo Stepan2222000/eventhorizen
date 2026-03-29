@@ -22,7 +22,7 @@ export default function MovementHistory() {
     queryKey: ["/api/boxes"],
   });
 
-  const { data: movements, isLoading } = useQuery({
+  const { data: movements, isLoading, isError, error } = useQuery({
     queryKey: ["/api/movements", boxFilter],
     queryFn: async ({ queryKey }) => {
       const [, box] = queryKey as [string, string];
@@ -30,12 +30,12 @@ export default function MovementHistory() {
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
         const text = (await res.text()) || res.statusText;
+        let message = text;
         try {
           const json = JSON.parse(text);
-          throw new Error(json.error || json.message || text);
-        } catch {
-          throw new Error(text);
-        }
+          message = json.error || json.message || text;
+        } catch {}
+        throw new Error(message || res.statusText);
       }
       return await res.json();
     },
@@ -135,6 +135,12 @@ export default function MovementHistory() {
                         <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                       </TableRow>
                     ))
+                  ) : isError ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-8 text-destructive">
+                        {error instanceof Error ? error.message : "Ошибка загрузки движений"}
+                      </TableCell>
+                    </TableRow>
                   ) : filteredMovements.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
@@ -182,7 +188,7 @@ export default function MovementHistory() {
               </Table>
           </div>
             
-          {!isLoading && (
+          {!isLoading && !isError && (
             <div className="flex items-center justify-between px-2 py-4">
               <div className="text-sm text-muted-foreground">
                 Показано <span className="font-semibold text-foreground">{filteredMovements.length}</span> движений

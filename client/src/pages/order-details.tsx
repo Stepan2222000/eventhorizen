@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,9 +45,16 @@ const RETURN_KIND_OPTIONS: Array<{ value: ReturnKind; label: string; hint: strin
   { value: "correction", label: "Корректировка", hint: "Исправление по неотгруженным позициям" },
 ];
 
+function parseStrictRouteId(value: string | undefined): number {
+  const text = (value || "").trim();
+  if (!/^\d+$/.test(text)) return Number.NaN;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) ? parsed : Number.NaN;
+}
+
 export default function OrderDetailsPage() {
   const { id } = useParams<{ id: string }>();
-  const orderId = Number.parseInt(id || "", 10);
+  const orderId = parseStrictRouteId(id);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -60,8 +67,16 @@ export default function OrderDetailsPage() {
   const [returnTrackNumber, setReturnTrackNumber] = useState("");
   const [returnItemIdsByItem, setReturnItemIdsByItem] = useState<Record<number, number[]>>({});
   const [returnBoxByItem, setReturnBoxByItem] = useState<Record<number, string>>({});
+  const [newShipmentMethodId, setNewShipmentMethodId] = useState<string>("");
+  const [newShipmentTrackNumber, setNewShipmentTrackNumber] = useState("");
+  const [newShipmentDeliveryPrice, setNewShipmentDeliveryPrice] = useState("0");
+  const [newShipmentDeliveryPayer, setNewShipmentDeliveryPayer] = useState<DeliveryPayer>("buyer");
+  const [newShipmentQtyByItem, setNewShipmentQtyByItem] = useState<Record<number, number>>({});
+  const initializedOrderIdRef = useRef<number | null>(null);
+  const returnPriceNumber = Number(returnPrice.trim() || "0");
+  const hasReturnDeliveryCost = Number.isFinite(returnPriceNumber) && returnPriceNumber > 0;
 
-  const { data: order, isLoading } = useQuery<OrderDetails>({
+  const { data: order, isLoading, isError, error } = useQuery<OrderDetails>({
     queryKey: [`/api/orders/${orderId}`],
     enabled: Number.isFinite(orderId),
   });
@@ -76,20 +91,83 @@ export default function OrderDetailsPage() {
     for (const shipment of order.shipments) {
       next[shipment.id] = shipment.status;
     }
-    setShipmentStatusDraft(next);
-    const initialReturnIds: Record<number, number[]> = {};
-    const initialReturnBoxes: Record<number, string> = {};
-    for (const item of order.items) {
-      initialReturnIds[item.id] = [];
-      initialReturnBoxes[item.id] = String(item.boxNumber || "").trim();
+
+    if (initializedOrderIdRef.current !== order.id) {
+      setShipmentStatusDraft(next);
+      const initialReturnIds: Record<number, number[]> = {};
+      const initialReturnBoxes: Record<number, string> = {};
+      for (const item of order.items) {
+        initialReturnIds[item.id] = [];
+        initialReturnBoxes[item.id] = String(item.boxNumber || "").trim();
+      }
+      setReturnItemIdsByItem(initialReturnIds);
+      setReturnBoxByItem(initialReturnBoxes);
+      setReturnKind("return");
+      setReturnNote("");
+      setReturnPrice("0");
+      setReturnPayer("buyer");
+      setReturnShippingMethodId("");
+      setReturnTrackNumber("");
+      setNewShipmentMethodId("");
+      setNewShipmentTrackNumber("");
+      setNewShipmentDeliveryPrice("0");
+      setNewShipmentDeliveryPayer("buyer");
+      setNewShipmentQtyByItem({});
+      initializedOrderIdRef.current = order.id;
+      return;
     }
-    setReturnItemIdsByItem(initialReturnIds);
-    setReturnBoxByItem(initialReturnBoxes);
+
+    setShipmentStatusDraft((prev) => {
+      const merged: Record<number, ShipmentStatus> = {};
+      for (const shipment of order.shipments) {
+        merged[shipment.id] = prev[shipment.id] ?? shipment.status;
+      }
+      return merged;
+    });
+
+    // Keep user draft across refetches; only add missing keys for newly loaded items.
+    setReturnItemIdsByItem((prev) => {
+      const nextIds: Record<number, number[]> = {};
+      for (const item of order.items) {
+        const maxReturn = Math.max(0, Number(item.qty || 0) - Number(item.returnedQty || 0));
+        const allowed = new Set<number>(
+          (item.soldItems || [])
+            .filter((sold) => sold.state === "sold")
+            .map((sold) => Number(sold.id))
+            .filter((id) => Number.isInteger(id) && id > 0)
+        );
+        const current = Array.isArray(prev[item.id]) ? prev[item.id] : [];
+        const uniq: number[] = [];
+        const seen = new Set<number>();
+        for (const rawId of current) {
+          const id = Number(rawId);
+          if (!Number.isInteger(id) || id <= 0) continue;
+          if (!allowed.has(id) || seen.has(id)) continue;
+          seen.add(id);
+          uniq.push(id);
+          if (uniq.length >= maxReturn) break;
+        }
+        nextIds[item.id] = uniq;
+      }
+      return nextIds;
+    });
+    setReturnBoxByItem((prev) => {
+      const nextBoxes = { ...prev };
+      for (const item of order.items) {
+        if (!nextBoxes[item.id]) nextBoxes[item.id] = String(item.boxNumber || "").trim();
+      }
+      return nextBoxes;
+    });
   }, [order]);
 
   const invalidateRelated = () => {
     queryClient.invalidateQueries({ queryKey: [`/api/orders/${orderId}`] });
-    queryClient.invalidateQueries({ queryKey: ["/api/orders"] });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/orders"),
+    });
     queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
     queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
     queryClient.invalidateQueries({
@@ -110,7 +188,100 @@ export default function OrderDetailsPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
     queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/customers"),
+    });
+    queryClient.invalidateQueries({
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        typeof query.queryKey[0] === "string" &&
+        query.queryKey[0].startsWith("/api/items"),
+    });
   };
+
+  const pendingQtyByOrderItem = useMemo(() => {
+    const result: Record<number, number> = {};
+    if (!order) return result;
+    for (const shipment of order.shipments) {
+      if (shipment.status !== "pending") continue;
+      for (const item of shipment.items) {
+        const orderItemId = Number(item.orderItemId);
+        const qty = Number(item.qty || 0);
+        if (!Number.isFinite(orderItemId) || !Number.isFinite(qty)) continue;
+        result[orderItemId] = (result[orderItemId] || 0) + qty;
+      }
+    }
+    return result;
+  }, [order]);
+
+  const shouldShowNewShipmentPayer = Number(newShipmentDeliveryPrice || 0) > 0;
+
+  const createShipmentMutation = useMutation({
+    mutationFn: async () => {
+      if (!order) throw new Error("Заказ не загружен");
+      if (!newShipmentMethodId) throw new Error("Выберите способ доставки");
+
+      const deliveryPriceNum = Number(newShipmentDeliveryPrice || 0);
+      if (!Number.isFinite(deliveryPriceNum) || deliveryPriceNum < 0) {
+        throw new Error("Стоимость доставки должна быть неотрицательным числом");
+      }
+
+      const items = order.items
+        .map((item) => {
+          const qty = Number(newShipmentQtyByItem[item.id] || 0);
+          const pending = Number(pendingQtyByOrderItem[item.id] || 0);
+          return { orderItemId: item.id, qty, pending };
+        })
+        .filter((item) => item.qty > 0);
+
+      if (items.length === 0) {
+        throw new Error("Укажите количество хотя бы для одной позиции");
+      }
+      for (const item of items) {
+        if (!Number.isInteger(item.qty) || item.qty <= 0) {
+          throw new Error("Количество в отгрузке должно быть положительным целым числом");
+        }
+        if (item.qty > item.pending) {
+          throw new Error(
+            `Для позиции #${item.orderItemId} можно перераспределить максимум ${item.pending} шт`
+          );
+        }
+      }
+
+      const payload = {
+        shippingMethodId: Number(newShipmentMethodId),
+        trackNumber: newShipmentTrackNumber.trim() || null,
+        deliveryPrice: newShipmentDeliveryPrice.trim() || "0",
+        deliveryPayer: shouldShowNewShipmentPayer ? newShipmentDeliveryPayer : null,
+        items: items.map((item) => ({
+          orderItemId: item.orderItemId,
+          qty: item.qty,
+        })),
+      };
+
+      const response = await apiRequest("POST", `/api/orders/${order.id}/shipments`, payload);
+      return response.json();
+    },
+    onSuccess: () => {
+      invalidateRelated();
+      setNewShipmentMethodId("");
+      setNewShipmentTrackNumber("");
+      setNewShipmentDeliveryPrice("0");
+      setNewShipmentDeliveryPayer("buyer");
+      setNewShipmentQtyByItem({});
+      toast({ title: "Отгрузка создана" });
+    },
+    onError: (error) => {
+      toast({
+        title: "Ошибка создания отгрузки",
+        description: error instanceof Error ? error.message : "Не удалось создать отгрузку",
+        variant: "destructive",
+      });
+    },
+  });
 
   const updateShipmentMutation = useMutation({
     mutationFn: async ({ shipmentId, status }: { shipmentId: number; status: ShipmentStatus }) => {
@@ -156,13 +327,34 @@ export default function OrderDetailsPage() {
         if (!item.itemIds || item.itemIds.length !== item.qty) {
           throw new Error(`Для позиции #${item.orderItemId} нужно выбрать конкретные экземпляры (itemIds)`);
         }
+        const orderItem = order.items.find((row) => row.id === item.orderItemId);
+        const soldIdSet = new Set<number>(
+          (orderItem?.soldItems || [])
+            .filter((sold) => sold.state === "sold")
+            .map((sold) => Number(sold.id))
+            .filter((id) => Number.isInteger(id) && id > 0)
+        );
+        if (item.itemIds.some((id) => !soldIdSet.has(Number(id)))) {
+          throw new Error(
+            `Для позиции #${item.orderItemId} выбран устаревший экземпляр. Обновите заказ и выберите доступные itemIds заново.`
+          );
+        }
+      }
+
+      const returnPriceText = returnPrice.trim() || "0";
+      const parsedReturnPrice = Number(returnPriceText);
+      if (!Number.isFinite(parsedReturnPrice)) {
+        throw new Error("Стоимость обратной доставки должна быть числом");
+      }
+      if (parsedReturnPrice < 0) {
+        throw new Error("Стоимость обратной доставки не может быть отрицательной");
       }
 
       const payload: Record<string, unknown> = {
         kind: returnKind,
         note: returnNote.trim() || null,
-        returnPrice: returnPrice.trim() || "0",
-        returnPayer: Number(returnPrice || 0) > 0 ? returnPayer : null,
+        returnPrice: returnPriceText,
+        returnPayer: parsedReturnPrice > 0 ? returnPayer : null,
         shippingMethodId: returnShippingMethodId ? Number(returnShippingMethodId) : null,
         trackNumber: returnTrackNumber.trim() || null,
         items: items.map((item) => ({
@@ -216,6 +408,16 @@ export default function OrderDetailsPage() {
     return (
       <Page title="Заказ" description="Загрузка заказа...">
         <p className="text-sm text-muted-foreground">Загрузка заказа...</p>
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Заказ" description="Ошибка загрузки заказа">
+        <p className="text-sm text-destructive">
+          {error instanceof Error ? error.message : "Не удалось загрузить заказ"}
+        </p>
       </Page>
     );
   }
@@ -470,6 +672,108 @@ export default function OrderDetailsPage() {
                 </div>
               ))
             )}
+
+            <div className="rounded-md border border-dashed p-4 space-y-4">
+              <div>
+                <p className="text-sm font-semibold">Добавить отгрузку (глубокая отгрузка)</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Перераспределяет количество из pending-отгрузок в новую отправку
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Способ доставки</p>
+                  <Select value={newShipmentMethodId} onValueChange={setNewShipmentMethodId}>
+                    <SelectTrigger data-testid="select-new-shipment-method">
+                      <SelectValue placeholder="Выберите способ доставки" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {shippingMethods.map((method) => (
+                        <SelectItem key={method.id} value={String(method.id)}>
+                          {method.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Трек-номер</p>
+                  <Input
+                    value={newShipmentTrackNumber}
+                    onChange={(e) => setNewShipmentTrackNumber(e.target.value)}
+                    placeholder="Опционально"
+                    data-testid="input-new-shipment-track"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Стоимость доставки</p>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={newShipmentDeliveryPrice}
+                    onChange={(e) => setNewShipmentDeliveryPrice(e.target.value)}
+                    data-testid="input-new-shipment-delivery-price"
+                  />
+                </div>
+                {shouldShowNewShipmentPayer && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Кто платит</p>
+                    <Select
+                      value={newShipmentDeliveryPayer}
+                      onValueChange={(value) => setNewShipmentDeliveryPayer(value as DeliveryPayer)}
+                    >
+                      <SelectTrigger data-testid="select-new-shipment-payer">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="buyer">Покупатель</SelectItem>
+                        <SelectItem value="seller">Продавец</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {order.items.map((item) => {
+                  const pendingQty = Number(pendingQtyByOrderItem[item.id] || 0);
+                  return (
+                    <div key={`new-shipment-item-${item.id}`} className="grid grid-cols-1 md:grid-cols-[1fr_160px] gap-3 items-center">
+                      <div className="text-sm">
+                        <span className="font-mono font-semibold">{item.smart}</span>
+                        <span className="text-muted-foreground ml-2">доступно в pending: {pendingQty} шт</span>
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        max={pendingQty}
+                        value={newShipmentQtyByItem[item.id] || 0}
+                        onChange={(e) => {
+                          const parsed = Number.parseInt(e.target.value, 10);
+                          const qty = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+                          setNewShipmentQtyByItem((prev) => ({ ...prev, [item.id]: qty }));
+                        }}
+                        disabled={pendingQty <= 0}
+                        data-testid={`input-new-shipment-qty-${item.id}`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => createShipmentMutation.mutate()}
+                  disabled={createShipmentMutation.isPending}
+                  data-testid="button-create-shipment"
+                >
+                  {createShipmentMutation.isPending ? "Создание..." : "Создать отгрузку"}
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -509,7 +813,7 @@ export default function OrderDetailsPage() {
                   data-testid="input-return-price"
                 />
               </div>
-              {Number(returnPrice || 0) > 0 && (
+              {hasReturnDeliveryCost && (
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Кто платит</p>
                   <Select value={returnPayer} onValueChange={(value) => setReturnPayer(value as DeliveryPayer)}>
@@ -567,7 +871,7 @@ export default function OrderDetailsPage() {
               <p className="text-sm text-muted-foreground">Выбрано к возврату: {totalReturnQty} шт</p>
               <Button
                 onClick={() => createReturnMutation.mutate()}
-                disabled={createReturnMutation.isPending}
+                disabled={createReturnMutation.isPending || totalReturnQty === 0}
                 data-testid="button-create-return"
               >
                 {createReturnMutation.isPending ? "Оформление..." : "Оформить возврат"}

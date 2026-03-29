@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import re
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -18,6 +21,7 @@ DEFAULT_MEDIA_CHUNK_SIZE = 1024 * 1024
 
 # Example: "bytes=0-99" / "bytes=100-" / "bytes=-500"
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+BUSINESS_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _parse_range_header(range_header: str, size_bytes: int) -> tuple[int, int] | None:
@@ -144,22 +148,50 @@ def to_string_or_empty(value: Any) -> str:
         return ""
     if isinstance(value, str):
         return value
-    if isinstance(value, (int, float, bool)):
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return ""
+        return str(int(value)) if value.is_integer() else str(value)
     return ""
 
 
-def to_int_or_zero(value: Any) -> int:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        try:
-            return int(value)
-        except Exception:
-            return 0
+def to_number_or_zero(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        n = float(value)
+        return n if math.isfinite(n) else 0
     raw = to_string_or_empty(value)
     try:
-        return int(float(raw))
+        n = float(raw)
+        return n if math.isfinite(n) else 0
     except Exception:
         return 0
+
+
+def to_int_or_none_strict(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        return int(value)
+    raw = to_string_or_empty(value).strip()
+    if not raw:
+        return None
+    try:
+        n = float(raw)
+    except Exception:
+        return None
+    if not math.isfinite(n) or not n.is_integer():
+        return None
+    return int(n)
 
 
 def to_opt_string(value: Any) -> str | None:
@@ -167,11 +199,28 @@ def to_opt_string(value: Any) -> str | None:
     return text or None
 
 
+async def parse_json_body(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        raise InvalidRequestError("Некорректный JSON") from None
+    if not isinstance(body, dict):
+        raise InvalidRequestError("JSON body должен быть объектом")
+    return body
+
+
+def _today_bounds_moscow_naive() -> tuple[datetime, datetime]:
+    now = datetime.now(BUSINESS_TZ)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    return (start.replace(tzinfo=None), end.replace(tzinfo=None))
+
+
 def parse_bulk_import_rows_from_objects(raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for idx, obj in enumerate(raw_rows):
         smart = to_string_or_empty(pick_row_value(obj, ["smart", "SMART"])).strip()
-        qty_delta = to_int_or_zero(pick_row_value(obj, ["qty_delta", "qtyDelta", "qty"]))
+        qty_delta = to_number_or_zero(pick_row_value(obj, ["qty_delta", "qtyDelta", "qty"]))
         reason = to_string_or_empty(pick_row_value(obj, ["reason", "type"])).strip()
 
         row: dict[str, Any] = {"smart": smart, "qtyDelta": qty_delta, "reason": reason}
@@ -201,8 +250,8 @@ def parse_bulk_import_rows_from_objects(raw_rows: list[dict[str, Any]]) -> list[
             row["trackNumber"] = track_number
 
         shipping_method_id_raw = pick_row_value(obj, ["shipping_method_id", "shippingMethodId"])
-        shipping_method_id_num = to_int_or_zero(shipping_method_id_raw)
-        if shipping_method_id_raw is not None and shipping_method_id_num > 0:
+        shipping_method_id_num = to_int_or_none_strict(shipping_method_id_raw)
+        if shipping_method_id_num is not None and shipping_method_id_num > 0:
             row["shippingMethodId"] = shipping_method_id_num
 
         row["__row"] = obj.get("__row", idx + 2)
@@ -279,10 +328,30 @@ def register_routes(app: FastAPI) -> None:
                 return JSONResponse(status_code=404, content={"error": "Customer not found"})
 
             orders = await storage.getOrders({"customerId": cid, "includeArchivedCustomers": True})
+            total_amount = 0.0
+            total_returns = 0
+            for order in orders:
+                order_id = order.get("id")
+                if not isinstance(order_id, int):
+                    continue
+                details = await storage.getOrderById(order_id)
+                if not details:
+                    continue
+                items_total = sum(
+                    max(0, int(item.get("qty", 0)) - int(item.get("returnedQty", 0))) * float(item.get("salePrice") or 0)
+                    for item in details.get("items", [])
+                )
+                buyer_delivery = sum(
+                    float(shipment.get("deliveryPrice") or 0)
+                    for shipment in details.get("shipments", [])
+                    if shipment.get("deliveryPayer") == "buyer"
+                )
+                total_amount += items_total + buyer_delivery
+                total_returns += len(details.get("returns", []))
             stats = {
                 "ordersCount": len(orders),
-                "totalAmount": round(sum(float(o.get("itemsTotal", 0)) for o in orders), 2),
-                "returnsCount": sum(int(o.get("returnsCount", 0)) for o in orders),
+                "totalAmount": round(total_amount, 2),
+                "returnsCount": total_returns,
             }
             return JSONResponse(content={"customer": customer, "orders": orders, "stats": stats})
         except Exception:
@@ -292,7 +361,7 @@ def register_routes(app: FastAPI) -> None:
     async def create_customer(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             customer = await storage.createCustomer(body)
             return JSONResponse(status_code=201, content=customer)
         except InvalidRequestError as err:
@@ -309,7 +378,7 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             customer = await storage.updateCustomer(cid, body)
             return JSONResponse(content=customer)
         except InvalidRequestError as err:
@@ -323,7 +392,7 @@ def register_routes(app: FastAPI) -> None:
     async def create_order(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             order = await storage.createOrder(body)
             return JSONResponse(status_code=201, content=order)
         except InsufficientBoxStockError as err:
@@ -391,6 +460,29 @@ def register_routes(app: FastAPI) -> None:
         except Exception:
             return JSONResponse(status_code=500, content={"error": "Failed to get order details"})
 
+    @app.post("/api/orders/{order_id}/shipments")
+    async def create_additional_shipment(request: Request, order_id: str) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            oid = int(order_id)
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid ID"})
+
+        try:
+            body = await parse_json_body(request)
+            shipment = await storage.createAdditionalShipment(oid, body)
+            return JSONResponse(status_code=201, content=shipment)
+        except InvalidRequestError as err:
+            message = str(err)
+            if message == "Заказ не найден":
+                return JSONResponse(status_code=404, content={"error": message})
+            return JSONResponse(status_code=400, content={"error": message})
+        except Exception as err:
+            return JSONResponse(
+                status_code=500,
+                content={"error": str(err) if str(err) else "Failed to create shipment"},
+            )
+
     @app.patch("/api/shipments/{shipment_id}/status")
     async def update_shipment_status(request: Request, shipment_id: str) -> Response:
         storage = _storage_from_request(request)
@@ -400,12 +492,14 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             status = body.get("status")
             if status not in ("pending", "shipped", "delivered"):
                 return JSONResponse(status_code=400, content={"error": "Input should be 'pending', 'shipped' or 'delivered'"})
             shipment = await storage.updateShipmentStatus(sid, status)
             return JSONResponse(content=shipment)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
         except Exception as err:
             if str(err) == "Shipment not found":
                 return JSONResponse(status_code=404, content={"error": str(err)})
@@ -423,7 +517,7 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             created = await storage.createOrderReturn(oid, body)
             return JSONResponse(status_code=201, content=created)
         except InvalidRequestError as err:
@@ -435,7 +529,7 @@ def register_routes(app: FastAPI) -> None:
     async def create_movement(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             if body.get("reason") == "return":
                 return JSONResponse(
                     status_code=400,
@@ -468,6 +562,48 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": str(err)})
         except Exception as err:
             return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to create movement"})
+
+    @app.post("/api/movements/batch")
+    async def create_movements_batch(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            body = await parse_json_body(request)
+            items = body.get("items")
+            if not isinstance(items, list) or len(items) == 0:
+                return JSONResponse(status_code=400, content={"error": "items должен быть непустым массивом"})
+            for item in items:
+                if item.get("reason") == "return":
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": "Возврат создается только через страницу проданных товаров"},
+                    )
+            results = await storage.createMovementsBatch(items)
+            return JSONResponse(status_code=201, content=results)
+        except InsufficientBoxStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {
+                        "smart": err.smart,
+                        "boxName": err.boxName,
+                        "available": err.available,
+                        "requested": err.requested,
+                    },
+                },
+            )
+        except InsufficientStockError as err:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": str(err),
+                    "details": {"smart": err.smart, "currentStock": err.currentStock, "requestedQty": err.requestedQty},
+                },
+            )
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to create movements batch"})
 
     @app.get("/api/movements")
     async def get_movements(request: Request) -> Response:
@@ -537,7 +673,7 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             updates: dict[str, Any] = {}
             if "note" in body:
                 updates["note"] = body.get("note")
@@ -807,7 +943,7 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             updates: dict[str, Any] = {}
             if "boxNumber" in body or "qtyDelta" in body:
                 return JSONResponse(
@@ -863,7 +999,7 @@ def register_routes(app: FastAPI) -> None:
     async def create_box(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             created = await storage.createBox(body)
             return JSONResponse(status_code=201, content=created)
         except InvalidRequestError as err:
@@ -875,7 +1011,7 @@ def register_routes(app: FastAPI) -> None:
     async def transfer_between_boxes(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             created = await storage.transferBetweenBoxes(body)
             return JSONResponse(status_code=201, content=created)
         except InsufficientBoxStockError as err:
@@ -918,7 +1054,7 @@ def register_routes(app: FastAPI) -> None:
     async def update_box(request: Request, box_name: str) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             updated = await storage.updateBox(box_name, body)
             return JSONResponse(content=updated)
         except InvalidRequestError as err:
@@ -959,7 +1095,7 @@ def register_routes(app: FastAPI) -> None:
     async def create_shipping_method(request: Request) -> Response:
         storage = _storage_from_request(request)
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             name = body.get("name")
             if not name or not isinstance(name, str):
                 return JSONResponse(status_code=400, content={"error": "Name is required"})
@@ -996,7 +1132,7 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             status = body.get("status")
             if status not in ("awaiting_shipment", "shipped"):
                 return JSONResponse(status_code=400, content={"error": "Invalid status"})
@@ -1057,49 +1193,22 @@ def register_routes(app: FastAPI) -> None:
             return JSONResponse(status_code=400, content={"error": "Invalid ID"})
 
         try:
-            body = await request.json()
+            body = await parse_json_body(request)
             box_number = body.get("boxNumber")
             if not box_number:
                 return JSONResponse(status_code=400, content={"error": "Номер коробки обязателен"})
-
-            sale_movement = await storage.getMovementById(mid)
-            if not sale_movement:
-                return JSONResponse(status_code=404, content={"error": "Movement not found"})
-            if sale_movement.get("reason") != "sale":
-                return JSONResponse(status_code=400, content={"error": "Can only return sales"})
-
-            return_movement = await storage.createMovement(
-                {
-                    "smart": sale_movement.get("smart"),
-                    "qtyDelta": abs(int(sale_movement.get("qtyDelta", 0))),
-                    "reason": "return",
-                    "note": f"Возврат продажи #{mid}",
-                    "purchasePrice": None,
-                    "salePrice": None,
-                    "deliveryPrice": None,
-                    "boxNumber": box_number,
-                    "trackNumber": None,
-                    "shippingMethodId": None,
-                    "saleStatus": None,
-                }
-            )
+            note_raw = body.get("note")
+            note = note_raw.strip() if isinstance(note_raw, str) and note_raw.strip() else None
+            return_movement = await storage.returnLegacySaleMovement(mid, str(box_number), note)
             return JSONResponse(status_code=201, content=return_movement)
-        except InsufficientBoxStockError as err:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "error": str(err),
-                    "details": {
-                        "smart": err.smart,
-                        "boxName": err.boxName,
-                        "available": err.available,
-                        "requested": err.requested,
-                    },
-                },
-            )
+        except InvalidRequestError as err:
+            msg = str(err)
+            if msg in {"Продажа не найдена"}:
+                return JSONResponse(status_code=404, content={"error": msg})
+            if msg in {"Товар уже возвращен на склад"}:
+                return JSONResponse(status_code=409, content={"error": msg})
+            return JSONResponse(status_code=400, content={"error": msg})
         except Exception as err:
-            if str(err) == "Товар уже возвращен на склад":
-                return JSONResponse(status_code=409, content={"error": str(err)})
             return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to return to inventory"})
 
     @app.post("/api/bulk-import")
@@ -1282,6 +1391,7 @@ def register_routes(app: FastAPI) -> None:
     async def dashboard_stats(request: Request) -> Response:
         ctx = request.app.state.ctx
         try:
+            start_moscow, end_moscow = _today_bounds_moscow_naive()
             row = await ctx.pools.inventory_pool.fetchrow(
                 """
                 WITH
@@ -1294,21 +1404,22 @@ def register_routes(app: FastAPI) -> None:
                     FROM inventory.stock
                   ),
                   movements_today AS (
-                    SELECT COUNT(*)::text as movements_today
+                    SELECT
+                      COUNT(*)::text as movements_today,
+                      COALESCE(SUM(CASE WHEN reason = 'sale' THEN ABS(qty_delta) ELSE 0 END), 0)::text as sales_today
                     FROM inventory.movements
-                    WHERE created_at::date = CURRENT_DATE
-                  ),
-                  sales_today AS (
-                    SELECT COUNT(*)::text as sales_today
-                    FROM inventory.movements
-                    WHERE created_at::date = CURRENT_DATE AND reason = 'sale'
+                    WHERE created_at >= $1
+                      AND created_at < $2
                   )
                 SELECT
                   (SELECT in_stock FROM in_stock) as in_stock,
                   (SELECT total_parts FROM total_parts) as total_parts,
                   (SELECT movements_today FROM movements_today) as movements_today,
-                  (SELECT sales_today FROM sales_today) as sales_today
+                  (SELECT sales_today FROM movements_today) as sales_today
                 """
+                ,
+                start_moscow,
+                end_moscow,
             )
             return JSONResponse(
                 content={
@@ -1320,3 +1431,12 @@ def register_routes(app: FastAPI) -> None:
             )
         except Exception:
             return JSONResponse(status_code=500, content={"error": "Failed to get dashboard stats"})
+
+    @app.get("/api/health/db")
+    async def db_health(request: Request) -> Response:
+        ctx = request.app.state.ctx
+        try:
+            await ctx.pools.inventory_pool.fetchrow("SELECT 1")
+            return JSONResponse(content={"connected": True})
+        except Exception:
+            return JSONResponse(status_code=503, content={"connected": False})

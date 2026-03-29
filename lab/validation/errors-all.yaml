@@ -1,0 +1,1921 @@
+meta:
+  target: |
+    Единый семантический отчёт по всем validation-файлам pages/modules.
+    Объединены ошибки и архитектурные улучшения из 12 файлов `errors-*.yaml`
+    с ручной агрессивной дедупликацией по сути проблемы и по общим участкам кода.
+  created: 2026-02-10
+  last_updated: 2026-02-12T00:46:42+04:00
+  dedup_policy: aggressive-semantic-manual
+  source_files:
+    - lab/validation/errors-add-movement-page.yaml
+    - lab/validation/errors-boxes.yaml
+    - lab/validation/errors-bulk-import-page.yaml
+    - lab/validation/errors-customers-page.yaml
+    - lab/validation/errors-dashboard.yaml
+    - lab/validation/errors-items-page.yaml
+    - lab/validation/errors-movement-history.yaml
+    - lab/validation/errors-order-details-page.yaml
+    - lab/validation/errors-orders-page.yaml
+    - lab/validation/errors-sold-out.yaml
+    - lab/validation/errors-stock-levels.yaml
+    - lab/validation/errors-top-parts.yaml
+  source_counts:
+    errors_total_before: 81
+    improvements_total_before: 47
+    records_total_before: 128
+  dedup_counts:
+    errors_after: 41
+    improvements_after: 29
+    records_after: 70
+
+errors:
+  - id: e-all-002
+    file: multiple
+    category: error-handling
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В нескольких страницах ошибки API маскируются как empty/not-found состояния.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь видит ложную картину данных ("нет данных", "товар не найден"),
+      хотя фактически это сетевой/серверный сбой.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Везде разделять error-state и empty-state; для error показывать retry.
+    code_example: |
+      Примеры: /boxes, /boxes/unboxed, /stock-levels, /movement-history, /movement transfer block, /dashboard.
+    found_count: 12
+    rejected_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один паттерн UX-ошибки на нескольких экранах."
+    fix: "Добавлена обработка isError отдельно от empty-state в boxes.tsx, unboxed.tsx, stock-levels.tsx, sold-items.tsx, stock-details.tsx, movement-history.tsx"
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: e-box-20260212-002
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: e-box-20260212-003
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-001
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: e-mh-102
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: e-amv003
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: e-dash-004
+
+  - id: e-all-003
+    file: client/src/pages/box-details.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Черновик описания коробки синхронизируется только по `box.description`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При переходе между коробками с одинаковым description в инпуте остаётся старый текст.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Сбрасывать draft по идентификатору/имени коробки, а не только по description.
+    code_example: |
+      useEffect(..., [box?.description]) без зависимости на box?.name/id.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Состояние формы залипает между сущностями."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: e-box-20260212-004
+
+  - id: e-all-004
+    file: py_backend/inventory_schema.py
+    category: race-condition
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Bootstrap схемы выполняет DDL/VIEW шаги без межпроцессного lock.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При одновременных стартах процессов возможен deadlock и падение приложения.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать advisory lock/миграционный lock или отдельный процесс миграции.
+    code_example: |
+      startup -> ensure_inventory_schema() с несколькими CREATE/UPDATE без process-level lock.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Практически воспроизводимый стартовый deadlock."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: e-box-20260212-005
+
+  - id: e-all-005
+    file: client/src/pages/sold-items.tsx
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Выбор клиента сделан обычным Select без поиска.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      На больших списках клиентов повышается риск ошибочного выбора и тормозит работа.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужен autocomplete по имени/телефону согласно UX-спеке.
+    code_example: |
+      sold-items.tsx: Select клиента без фильтрации.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Отклонение от заявленной UX-спецификации."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-001
+
+  - id: e-all-006
+    file: multiple
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Логика `deliveryPayer` при нулевой стоимости доставки расходится между созданием и отображением.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В UI/API сохраняется противоречивое состояние ("0 ₽, платит buyer") и ломается бизнес-семантика.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При `deliveryPrice == 0` payer должен быть null/скрыт во всём контуре.
+    code_example: |
+      sold-items.tsx (условия поля payer) + storage.py (shipment payer normalization).
+    found_count: 4
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один бизнес-инвариант, сломанный в двух слоях."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-002
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-007
+
+  - id: e-all-007
+    file: multiple
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В ряде мест используется вложенный интерактив `button` внутри другого интерактива.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Невалидная семантика, лишние tab-stop, нестабильный click/keyboard behavior.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      На действие должен быть один интерактивный control (`asChild`, div+role, и т.п.).
+    code_example: |
+      item-picker-dialog.tsx + stock-levels.tsx (`Link` + `Button` nesting).
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Одинаковый a11y/DOM-паттерн в разных экранах."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-003
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-005
+
+  - id: e-all-008
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При несуществующей коробке `getItems()` отдаёт `limit=0, offset=0`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Ломается контракт пагинации и поведение клиентов/таблиц, ожидающих нормальный limit/offset.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Даже для пустого ответа возвращать рассчитанные входные `limit/offset`.
+    code_example: |
+      if resolved is None: return {"items": [], "total": 0, "limit": 0, "offset": 0}
+    found_count: 4
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Дубликат одного и того же backend-дефекта."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-004
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-007
+
+  - id: e-all-009
+    file: client/src/components/smart-search.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Асинхронный ответ поиска может повторно открыть popover после потери фокуса.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Popover внезапно перекрывает соседний ввод и мешает заполнению формы.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Открывать результаты только если запрос актуален и фокус всё ещё на поле.
+    code_example: |
+      setIsOpen(data.length > 0) без проверки activeElement/latestQuery.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Гонка между blur и delayed response."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-005
+
+  - id: e-all-011
+    file: client/src/pages/sold-items.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Перед submit проверка наличия коробки берётся из устаревшего React Query cache.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь сразу после заказа повторно видит уже невалидную коробку и получает 400 от сервера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Перед submit использовать свежие данные (`ensureQueryData/refetch`) или блокировать повтор до синхронизации.
+    code_example: |
+      sold-items.tsx: `queryClient.getQueryData("/api/stock/:smart/boxes")` в пред-валидации submit.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Семантический stale-cache race на повторном действии."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-007
+
+  - id: e-all-012
+    file: py_backend/storage.py
+    category: state-corruption
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Обновление статуса shipment принимает любой enum-статус без проверки перехода.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Возможен rollback `delivered -> shipped -> pending`, что искажает жизненный цикл и отчётность.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужна FSM-валидация допустимых переходов и запрет обратных шагов.
+    code_example: |
+      routes PATCH проверяет только enum, storage update просто переписывает status.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один дефект бизнес-инварианта, подтверждён в двух отчётах."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-008
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-005
+
+  - id: e-all-013
+    file: client/src/pages/order-details.tsx
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Кнопка оформления возврата активна при нулевом выбранном количестве.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Лишние запросы и ошибки "укажите количество" засоряют UX и скрывают важные ошибки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Блокировать submit, пока `totalReturnQty == 0`.
+    code_example: |
+      disabled={isPending} без условия по totalReturnQty.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Простой UX-guard отсутствует."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: e-orders-009
+
+  - id: e-all-014
+    file: multiple
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Разные слои по-разному нормализуют ввод (`trim`), ключи кеша и фильтры.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Ложные "нет совпадений", несогласованные disabled-состояния и stale-инвалидации.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать единый канонический normalizer (`trim/lower/encode`) в UI, queryKey и API-ключах.
+    code_example: |
+      shared/schema smart trim, box-selector disabled, movement-history/stock filter trim, smart invalidation key trim.
+    found_count: 9
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один тип ошибок нормализации проявляется на разных экранах."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: e-amv001
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: e-amv005
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: e-amv006
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: e-mh-106
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-006
+
+  - id: e-all-015
+    file: client/src/pages/add-movement.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Поле qty парсится в int на каждый keypress.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Промежуточные состояния (`-`) превращаются в 0, ломая ввод отрицательных значений.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Хранить строку во время ввода и парсить на blur/submit.
+    code_example: |
+      onChange -> parseInt -> fallback 0.
+    found_count: 3
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Стабильный UX-баг поля количества."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: e-amv002
+
+  - id: e-all-017
+    file: multiple
+    category: state-corruption
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После item-changing мутаций в нескольких экранах не инвалидируется `/api/items*`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      На странице экземпляров сохраняется stale-состояние до ручного reload.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Любая мутация, влияющая на items, должна централизованно инвалидировать `/api/items*`.
+    code_example: |
+      add-movement / stock-details / box-details / bulk-import onSuccess без invalidation items.
+    found_count: 5
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один и тот же cache-invalidation gap во множестве мест."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-001
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-002
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-003
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-004
+
+  - id: e-all-018
+    file: client/src/components/box-selector.tsx
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Optional BoxSelector не даёт явного пути вернуть `null` после выбора коробки.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Фильтр "залипает" и пользователь не может вернуться в "Все коробки".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Добавить пункт "Все коробки / Сбросить" с `onSelect(null)`.
+    code_example: |
+      CommandGroup рендерит только options.map(...) без reset item.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Edge-case фильтра приводит к постоянному ограничению списка."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-005
+
+  - id: e-all-019
+    file: multiple
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Клиентские обработчики ошибок в ряде мест бросают raw text/JSON и теряют понятные сообщения.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь видит технический payload вместо нормального текста ошибки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Безопасно парсить JSON error/message и использовать единый helper.
+    code_example: |
+      items.tsx fetchItems + bulk-import.tsx on !response.ok.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Единый класс клиентского error-parsing багов."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: e-items-006
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-a12f40
+
+  - id: e-all-020
+    file: py_backend/storage.py
+    category: spec-mismatch
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для самовывоза новые shipments создаются со статусом `pending`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Самовывозные отгрузки "зависают" в неверном статусном потоке.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Pickup должен сразу иметь статус `delivered` по согласованной бизнес-логике.
+    code_example: |
+      createAdditionalShipmentAttempt(): VALUES (..., 'pending', ...).
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Нарушение spec для pickup-flow."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-001
+
+  - id: e-all-021
+    file: client/src/pages/order-details.tsx
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Поле трек-номера остаётся видимым для метода доставки "Самовывоз".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь вводит нерелевантные данные и получает противоречивый UX.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для pickup поле tracking должно быть hidden/disabled.
+    code_example: |
+      Форма добавления shipment не переключает visibility tracking по deliveryMethod.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "UI-спека pickup-flow."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-002
+
+  - id: e-all-022
+    file: py_backend/storage.py
+    category: state-corruption
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Return обновляет returnedQty/items, но не перераспределяет pending shipment_items.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Возникает рассинхрон: товар уже вернулся, но всё ещё "ожидает отгрузки".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Return должен уменьшать pending allocation или блокироваться до корректной переразбивки.
+    code_example: |
+      createOrderReturnAttempt() не синхронизирует pending shipment allocations.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Критичный state mismatch между returns и shipments."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-003
+
+  - id: e-all-024
+    file: py_backend/storage.py
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После тяжёлых мутаций сервер синхронно собирает полный OrderDetails.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Клиент долго висит в pending-статусе и пользователь может повторять действие.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Возвращать быстрый ACK и грузить полный state отдельным GET/refetch.
+    code_example: |
+      COMMIT -> immediate getOrderById() в createAdditionalShipmentAttempt/createOrderReturnAttempt.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Latency-induced UX/failure risk."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: e-order-details-006
+
+  - id: e-all-025
+    file: multiple
+    category: race-condition
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Агрегаты собираются несколькими независимыми SELECT без общего snapshot.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Ответ может содержать значения из разных моментов времени.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать один SQL/CTE или транзакцию REPEATABLE READ для консистентного чтения.
+    code_example: |
+      top-parts: asyncio.gather(7 SELECT) + stock-levels: separate stock/box_contents reads.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Общий класс snapshot-inconsistency."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: e-top-001
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-004
+
+  - id: e-all-026
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для SMART без закупочной цены себестоимость подставляется как 0.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Позиции с неизвестной себестоимостью ложнопозитивно попадают в "прибыльные".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Исключать/маркировать записи без валидной purchase cost.
+    code_example: |
+      avg_purchase_by_smart.get(smart, 0.0)
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Финансовая метрика искажена fallback=0."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: e-top-002
+
+  - id: e-all-028
+    file: client/src/pages/top-parts.tsx
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Ошибка одного mode приводит к раннему return и исчезновению tabs.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь теряет доступ к рабочим вкладкам и вынужден reload.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Ошибка должна быть локальна внутри текущего таба, tabs должны оставаться доступными.
+    code_example: |
+      if (isError) return <Page ...>; в верхнем уровне компонента.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Неправильная область отказа UI."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: e-top-004
+
+  - id: e-all-029
+    file: multiple
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Бизнес-даты/время формируются в одном TZ, а рендерятся в TZ браузера.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для пользователей вне business TZ даты и время смещаются.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно фиксировать TZ отображения (например, Europe/Moscow) или отдавать date-only поле.
+    code_example: |
+      toDateIso() на backend + locale render без TZ на клиенте.
+    found_count: 4
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Единый TZ-класс дефекта на двух страницах."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: e-soldout-001
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: e-mh-103
+
+  - id: e-all-030
+    file: py_backend/storage.py
+    category: logic-error
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      avgSalePrice считает NULL sale_price как 0 в числителе, но оставляет в знаменателе.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Средняя цена продажи системно занижается.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Строки без sale_price исключать из average denominator или использовать валидный fallback.
+    code_example: |
+      SUM(COALESCE(sale_price, 0) * ABS(qty_delta)) / SUM(ABS(qty_delta))
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Критичный аналитический bias."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: e-soldout-002
+
+  - id: e-all-031
+    file: multiple
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Несколько endpoint ловят `Exception` и возвращают generic 500 без логирования причины.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Диагностика продовых сбоев усложняется, клиенты получают обезличенные ошибки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Логировать server-side root cause (`logger.exception`) при сохранении безопасного ответа клиенту.
+    code_example: |
+      GET /api/sold-out, GET /api/stock: bare except без structured logging.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Повторяющийся backend error-handling anti-pattern."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: e-soldout-003
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-003
+
+  - id: e-all-032
+    file: multiple
+    category: state-corruption
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После временных сбоев страницы могут оставаться на stale/empty UI без явного refresh flow.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь продолжает видеть устаревшее состояние даже после восстановления API.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужны retry/refetch controls для возврата к актуальным данным.
+    code_example: |
+      sold-out.tsx + stock-levels.tsx: stale cache/empty-state после recovery без автоматической синхронизации.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Схожий post-failure stale-state паттерн."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: e-soldout-004
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-007
+
+  - id: e-all-033
+    file: client/src/pages/sold-out.tsx
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При network error UI показывает сырой `Failed to fetch`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Русскоязычный интерфейс в аварийном состоянии становится техническим и непонятным.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Показывать локализованный fallback и действие "Повторить".
+    code_example: |
+      error.message выводится напрямую без маппинга network ошибок.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Локализация и UX error text."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: e-soldout-005
+
+  - id: e-all-034
+    file: py_backend/routes.py
+    category: logic-error
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      CRLF в parse_csv_text не завершает строку корректно.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      CSV из Excel/Windows склеивается в одну строку и массово ломает импорт.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      `\r\n` должен вызывать тот же row finalize, что и `\n`.
+    code_example: |
+      parse_csv_text: ветка `if ch == "\r"` пропускает push_row в CRLF-кейсе.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Критичный CSV parser regression."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-1f9c01
+
+  - id: e-all-035
+    file: py_backend/routes.py
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      CSV декодируется как UTF-8 без удаления BOM в заголовке.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      `\ufeffsmart` не распознаётся как `smart`, строки валятся на валидации.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать `utf-8-sig` или явно strip BOM из первого header.
+    code_example: |
+      content.decode("utf-8") + headers = [h.strip() ...] без lstrip("\ufeff").
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Частый кейс экспортов с BOM."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-2a44b0
+
+  - id: e-all-036
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Маппинг ключей в bulk import не полностью case-insensitive.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Заголовки типа `Smart`, `QTY_DELTA` не попадают в маппинг.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нормализовать входные ключи в lower-case до pick/parse.
+    code_example: |
+      pick_row_value([... "smart", "SMART" ...]) вместо full-lower normalization.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Явный drift с документацией."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-3b8812
+
+  - id: e-all-037
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      bulk_import сваливает ожидаемые parse/input ошибки в общий 500.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь не понимает, как исправить файл, видя generic server failure.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Предсказуемые ошибки формата/валидации должны возвращаться как 400 с понятным текстом.
+    code_example: |
+      except Exception: return 500 {"error":"Failed to process bulk import"}
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Ошибка классификации user/input ошибок."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-4f190a
+
+  - id: e-all-038
+    file: client/src/pages/bulk-import.tsx
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      UI-подсказки обязательности полей (box_number, note) расходятся с backend-валидацией.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь готовит файл по UI и получает массовые отклонения на сервере.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      UI-формат должен синхронно отражать реальные правила validateAndSanitizeForInsert().
+    code_example: |
+      bulk-import.tsx "Опционально" vs storage.py rules for sale/writeoff/adjust.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Классический contract drift UI vs backend."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-5d02e7
+
+  - id: e-all-039
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      import-template использует фиксированную коробку `K-123` в примерах.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В окружении без K-123 официальный шаблон не импортируется "как есть".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать реально существующую коробку или явно пометить необходимость заменить значение.
+    code_example: |
+      routes.py /api/import-template: "box_number": "K-123".
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Template должен быть импортируемым по умолчанию."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-8a7c2d
+
+  - id: e-all-040
+    file: py_backend/routes.py
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      CSV с одними заголовками проходит как успешный no-op (200, 0/0/0).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь ошибочно считает импорт успешным, хотя данных нет.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Возвращать 400 для отсутствия data rows (как уже делается для XLSX).
+    code_example: |
+      CSV-ветка не проверяет empty data rows аналогично XLSX ветке.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Неодинаковая валидация CSV/XLSX."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: e-9b113e
+
+  - id: e-all-041
+    file: py_backend/storage.py
+    category: resource-leak
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Dashboard загружает полный `/api/movements` и `/api/stock`, затем режет `.slice(0,5)` на клиенте.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Лишняя нагрузка на БД/сеть и деградация рендера при росте данных.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Серверные лимиты/специализированные lightweight endpoints для preview.
+    code_example: |
+      dashboard.tsx slice(0,5) + storage getMovements/getStockLevels без limit.
+    found_count: 4
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Один perf anti-pattern для двух виджетов дашборда."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: e-dash-001
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: e-dash-002
+
+  - id: e-all-044
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      `salesToday` трактуется/считается неоднозначно (операции vs штуки), и реализация дрейфует.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Метрика "Продаж сегодня" вводит в заблуждение при qty>1 и при изменениях кода.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Зафиксировать бизнес-смысл метрики и вычисление (COUNT операций или SUM единиц).
+    code_example: |
+      dashboard_stats SQL: COUNT(*) vs SUM(ABS(qty_delta)) в разных ревизиях.
+    found_count: 2
+    rejected_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Зафиксирован semantic drift с частичным несогласием в источнике."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: e-dash-006
+
+  - id: e-all-046
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Невалидный `boxNumber` в `/api/movements` превращается в 500 вместо 400.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Клиентские ошибки фильтра выглядят как авария сервера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно маппить `InvalidRequestError` в HTTP 400.
+    code_example: |
+      GET /api/movements: except Exception -> 500.
+    found_count: 4
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Одинаковый дефект подтверждён в двух отчётах."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: e-mh-101
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: e-dash-008
+
+  - id: e-all-048
+    file: py_backend/storage.py
+    category: logic-error
+    severity: critical
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Булевые флаги в customer-flow приводятся через `bool(...)`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      `"false"` становится True, null ведёт к unintended state changes.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Строгая bool-валидация (или reject 400) без truthy/falsy coercion.
+    code_example: |
+      updateCustomer archived + getOrders includeArchivedCustomers.
+    found_count: 3
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Общий bool-coercion дефект на двух API путях."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: e-cust-001
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: e-cust-002
+
+  - id: e-all-049
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Customer details endpoint сочетает N+1 детали и общий fail-fast try/except.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      На крупных/частично проблемных данных растут задержки и растёт вероятность полного 500.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Перенести агрегаты в storage/SQL и изолировать частичные ошибки.
+    code_example: |
+      get_customer_by_id: loop orders -> getOrderById in cycle + top-level except 500.
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Семантически один reliability/perf кластер."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: e-cust-003
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: e-cust-004
+
+  - id: e-all-051
+    file: client/src/pages/stock-levels.tsx
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      SMART подставляется в route без URL encoding.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для smart со спецсимволами формируется некорректный URL.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Использовать `encodeURIComponent` при формировании ссылки.
+    code_example: |
+      href={`/stock/${item.smart}`} вместо encoded variant.
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        agrees: true
+        note: "Локальный routing edge-case."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: e-stock-002
+
+improvements:
+  - id: i-all-001
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика invalidateQueries после мутаций продублирована во многих модулях.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Высокий риск пропустить ключ и получить stale UI.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести единый helper инвалидации для инвентарно-связанных операций.
+    code_example: |
+      add-movement / box-details / sold-items / bulk-import / customers и др.
+    found_count: 6
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Один DRY-кластер для invalidation orchestration."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: i-box-20260212-001
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: i-amv001
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: i-items-001
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: i-orders-001
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: i-sub01
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: i-cust-002
+
+  - id: i-all-002
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Обработка HTTP ошибок вручную дублируется вместо единого helper.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Сообщения и fallback-поведение расходятся между страницами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Централизовать parsing/throw через общий utility.
+    code_example: |
+      items fetchItems + item-picker fetch + movement-history queryFn.
+    found_count: 3
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Объединён DRY-класс duplicate error parser."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: i-items-002
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: i-orders-005
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: i-mh-202
+
+  - id: i-all-003
+    file: multiple
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Поиск отправляет запрос на каждый символ без debounce.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишняя нагрузка на API и заметные лаги на медленной сети.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить debounce/useDeferredValue (250-400ms).
+    code_example: |
+      customers.tsx search + items.tsx q search.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Единый perf UX паттерн без debounce."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: i-items-004
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: i-cust-001
+
+  - id: i-all-004
+    file: multiple
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Фильтрация/рендер больших списков выполняются без memo/virtualization.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      С ростом данных появляются лаги ввода и прокрутки.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить useMemo, debounce и виртуализацию таблиц.
+    code_example: |
+      movement-history filtered map + stock-levels sort/filter on each render.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Сводный performance-кластер."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: i-mh-201
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: i-stock-002
+
+  - id: i-all-005
+    file: multiple
+    category: kiss-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Крупные страницы совмещают слишком много ответственности в одном компоненте.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Поддержка и тестирование усложняются, растёт риск регрессий.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Делить на подкомпоненты + отдельные hooks orchestration.
+    code_example: |
+      sold-items.tsx, order-details.tsx, dashboard.tsx.
+    found_count: 3
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Монолитные UI-компоненты в нескольких модулях."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: i-orders-004
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: i-order-details-001
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-007
+
+  - id: i-all-006
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Форматирование reason/date/currency и label mapping частично дублируются и расходятся.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Разные страницы показывают одинаковые данные по-разному.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести форматтеры/мапперы в единый shared слой.
+    code_example: |
+      sold-items formatters + dashboard reason/date render.
+    found_count: 5
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Объединённый formatting DRY cluster."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: i-orders-002
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-001
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-004
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-008
+
+  - id: i-all-007
+    file: multiple
+    category: dead-code
+    issue: |
+      ЧТО НЕ ТАК:
+      Есть неиспользуемые импорты в нескольких файлах.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Шум в коде и ложные зависимости.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Удалить неиспользуемые импорты/включить строгую lint-проверку.
+    code_example: |
+      bulk-import.tsx `apiRequest`; movement-history.tsx `CardHeader/CardTitle`.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Прямой dead-code cleanup."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: i-dead01
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: i-mh-203
+
+  - id: i-all-008
+    file: multiple
+    category: dead-code
+    issue: |
+      ЧТО НЕ ТАК:
+      В коде есть ветки, почти недостижимые при текущих инвариантах данных.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишняя сложность, ложная вариативность поведения.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Удалить ветки либо явно документировать и обосновать источник данных.
+    code_example: |
+      boxes overboxed branch + dashboard qty==0 in getStockStatus.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Семантически общий dead-branch кластер."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: i-box-20260212-004
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-006
+
+  - id: i-all-009
+    file: py_backend/routes.py
+    category: kiss-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Customer endpoint смешивает transport и бизнес-агрегации и делает over-fetch.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Логика тяжелеет, усложняется тестирование и ухудшается производительность.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести stats в storage SQL-агрегат и оставить в роуте orchestration.
+    code_example: |
+      get_customer_by_id: orders + per-order details for stats.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Объединены два архитектурно близких customer-improvement пункта."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: i-cust-003
+      - source_file: lab/validation/errors-customers-page.yaml
+        source_id: i-cust-004
+
+  - id: i-all-010
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      `getStockStatus` реализован и поддерживается в нескольких местах.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Пороги/метки легко расходятся между страницами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести единый helper `stock-status.ts`.
+    code_example: |
+      stock-levels.tsx + dashboard.tsx.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Единая функция статуса остатков."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: i-stock-001
+
+  - id: i-all-011
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Типы ответа boxes объявлены локально в нескольких файлах.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Изменение API может "тихо" разъехаться между экранами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести единый тип/контракт в shared слой.
+    code_example: |
+      boxes.tsx, box-selector.tsx, box-details.tsx.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Повторяющиеся локальные API-типы."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: i-box-20260212-002
+
+  - id: i-all-012
+    file: py_backend/storage.py
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      getBoxes(activeOnly=True) всё равно считает тяжёлые summary-агрегаты.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Для простого selector-запроса выполняется лишняя работа.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Разделить легкий список и аналитику (или добавить includeSummary flag).
+    code_example: |
+      getBoxes: второй CTE на unboxed/overboxed выполняется всегда.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Локальный backend perf/architecture debt."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-boxes.yaml
+        source_id: i-box-20260212-003
+
+  - id: i-all-013
+    file: client/src/pages/add-movement.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Для transfer одновременно существуют parent-query и query внутри BoxSelector.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Две точки правды для loading/error/options усложняют сопровождение.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Оставить один источник данных и единый state-flow.
+    code_example: |
+      smartBoxesQuery в parent + BoxSelector mode="bySmart" query path.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Избыточная ответственность между компонентами."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: i-amv002
+
+  - id: i-all-014
+    file: multiple
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Есть типовая "типобезопасность в обход": `undefined as any` и небезопасный cast query data.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Ошибки контракта проявляются поздно, в рантайме.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Уточнить типы форм/queries и убрать `any`/unsafe cast.
+    code_example: |
+      add-movement defaultValues reason + stock-levels `(stockLevels as StockLevel[] || [])`.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Объединён типовой type-safety debt."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: i-amv003
+      - source_file: lab/validation/errors-stock-levels.yaml
+        source_id: i-stock-003
+
+  - id: i-all-015
+    file: client/src/pages/add-movement.tsx
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Очистка полей по `reason` реализована длинными повторяющимися блоками setValue.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При добавлении нового reason легко получить неполную очистку и регрессию.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести правила очистки в конфигурационную таблицу.
+    code_example: |
+      if (reason === "...") { setValue(...) ... } repeated branches.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Локальный DRY refactor."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-add-movement-page.yaml
+        source_id: i-amv004
+
+  - id: i-all-016
+    file: client/src/pages/items.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      queryKey формируется из сырого ввода, а запрос — из trimmed значений.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Один серверный запрос кешируется под разными ключами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Нормализовать input до формирования queryKey.
+    code_example: |
+      queryKey: ["/api/items", q, smart, ...] при fetchItems({ q: q.trim(), smart: smart.trim(), ... }).
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Cache key normalization mismatch."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-items-page.yaml
+        source_id: i-items-003
+
+  - id: i-all-017
+    file: py_backend/storage.py
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Тяжёлые order-mutations возвращают полный OrderDetails в том же ответе.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Увеличивается latency, интерфейс выглядит "зависшим".
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Возвращать короткий ACK и загружать подробности отдельным refetch.
+    code_example: |
+      createAdditionalShipmentAttempt/createOrderReturnAttempt -> post-commit getOrderById.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Согласовано с error-кластером о stuck-мутaциях."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-order-details-page.yaml
+        source_id: i-order-details-002
+
+  - id: i-all-018
+    file: py_backend/storage.py
+    category: kiss-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      getTopParts совмещает SQL-fetch, аллокации, нормализацию и ранжирование в одной функции.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Сложно читать, тестировать и безопасно менять.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Разбить на подфункции: fetch_inputs / allocate / rank.
+    code_example: |
+      getTopParts(...) ~240+ строк mixed responsibilities.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Backend KISS decomposition candidate."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: i-top-001
+
+  - id: i-all-019
+    file: py_backend/storage.py
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика cost allocation дублируется для shipment и return блоков.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Формулы могут разъехаться при будущем изменении.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий helper распределения стоимости.
+    code_example: |
+      for rows in shipment_rows_by_shipment ... + for rows in return_rows_by_return ...
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Точечный DRY refactor."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: i-top-002
+
+  - id: i-all-020
+    file: py_backend/storage.py
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      combinedScore использует "магические" числа (10, 0.5) без явной конфигурации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Сложно объяснять, калибровать и сравнивать результаты между релизами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести коэффициенты в именованные константы/config.
+    code_example: |
+      normalized_sales = min(total_sales / 10, 100); combined = sales*0.5 + profit*0.5.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Требует явной business-тюнинговой модели."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-top-parts.yaml
+        source_id: i-top-003
+
+  - id: i-all-021
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      loading/error/empty блоки аналитических таблиц дублируются по страницам.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      UX-состояния расходятся и сложнее синхронно улучшать.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий компонент состояния аналитической таблицы.
+    code_example: |
+      sold-out.tsx и top-parts.tsx ветки if (isLoading/isError/empty).
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Переиспользуемый UI state container."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: i-soldout-001
+
+  - id: i-all-022
+    file: py_backend/storage.py
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      `/api/sold-out` отдает полный список без пагинации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      SQL/сериализация/рендер деградируют с ростом объёма данных.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить limit/offset (или cursor) и UI paging.
+    code_example: |
+      sold-out SELECT ... ORDER BY ... без LIMIT/OFFSET.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Локальный API scalability debt."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-sold-out.yaml
+        source_id: i-soldout-002
+
+  - id: i-all-023
+    file: multiple
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Правила bulk-import дублируются в UI-тексте и backend-валидации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Уже произошёл drift между документацией на форме и фактическими проверками.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Сделать один источник truth (schema/metadata endpoint) и рендерить UI из него.
+    code_example: |
+      bulk-import.tsx expected format vs storage validateAndSanitizeForInsert.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Единая конфигурация правил вместо копипаста."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-bulk-import-page.yaml
+        source_id: i-dry01
+
+  - id: i-all-024
+    file: client/src/components/sidebar.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Активный пункт меню определяется только по точному совпадению route.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      На вложенных страницах (`/stock/:smart`, `/orders/:id`, ...) активный пункт не подсвечивается.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Использовать startsWith/pattern matching для nested routes.
+    code_example: |
+      const isActive = location === item.href;
+    found_count: 3
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Навигационный UX-контекст теряется на detail routes."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-002
+
+  - id: i-all-025
+    file: client/src/lib/queryClient.ts
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Глобальные query-настройки (`staleTime: Infinity`) слишком агрессивны для "живых" метрик дашборда.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Цифры "сегодня" могут быть устаревшими в долгоживущей вкладке.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Локально переопределить freshness/refetch policy для dashboard queries.
+    code_example: |
+      staleTime: Infinity + refetchOnWindowFocus: false в глобальном QueryClient.
+    found_count: 2
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Кандидат на selective query policy override."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-003
+
+  - id: i-all-026
+    file: client/src/pages/dashboard.tsx
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Скелетон списка дублируется в двух карточках.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Любое обновление loading UI нужно синхронно повторять.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести `DashboardListSkeleton` и переиспользовать.
+    code_example: |
+      dashboard.tsx: два похожих `[...Array(5)].map(...)` блока.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Локальный DRY cleanup."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-dashboard.yaml
+        source_id: i-dash-005
+
+  - id: i-all-027
+    file: client/src/pages/movement-history.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      `qtyDelta === 0` стилизуется как положительное изменение.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Нулевое изменение визуально воспринимается как приход.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Ввести отдельный нейтральный стиль для zero delta.
+    code_example: |
+      `qtyDelta >= 0 ? success : destructive` и префикс `+`.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Улучшение семантики визуализации."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: i-mh-204
+
+  - id: i-all-028
+    file: client/src/pages/movement-history.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Счётчик использует фиксированную форму "движений" без склонения.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Грамматически некорректные строки снижают качество интерфейса.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить pluralization helper для русского языка.
+    code_example: |
+      `Показано {count} движений` без pluralize.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Точечный UX polish."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-movement-history.yaml
+        source_id: i-mh-205
+
+  - id: i-all-029
+    file: client/src/pages/sold-items.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      В одном рендере несколько раз вызывается одинаковый `items.find(...)`.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишние линейные проходы и менее читаемый код.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вычислять `activePickerItem` один раз и переиспользовать.
+    code_example: |
+      smart/boxNumber/qty props строятся через повторные items.find calls.
+    found_count: 1
+    findings:
+      - agent: semantic-merge-manual
+        timestamp: 2026-02-18T12:00:00+00:00
+        note: "Микро-оптимизация рендера и читаемости."
+    fix: null
+    source_refs:
+      - source_file: lab/validation/errors-orders-page.yaml
+        source_id: i-orders-003

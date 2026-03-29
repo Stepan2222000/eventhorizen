@@ -28,12 +28,17 @@ export default function StockDetails() {
   const [transferMax, setTransferMax] = useState<number>(0);
   const [transferNote, setTransferNote] = useState<string>("");
 
-  const { data: stockInfo, isLoading: stockInfoLoading } = useQuery<StockBySmart>({
+  const { data: stockInfo, isLoading: stockInfoLoading, isError: stockInfoError, error: stockInfoErr } = useQuery<StockBySmart>({
     queryKey: [`/api/stock/${smart}`],
     enabled: !!smart,
   });
 
-  const { data: purchasesData, isLoading } = useQuery<Movement[]>({
+  const {
+    data: purchasesData,
+    isLoading,
+    isError: purchasesIsError,
+    error: purchasesError,
+  } = useQuery<Movement[]>({
     queryKey: [`/api/stock/${smart}/purchases`],
     enabled: !!smart,
   });
@@ -56,7 +61,12 @@ export default function StockDetails() {
     totalPurchaseQtyWithPrice > 0 && totalPurchaseCost !== null ? totalPurchaseCost / totalPurchaseQtyWithPrice : null;
 
   // Fetch sales analytics
-  const { data: salesData, isLoading: salesLoading } = useQuery<{
+  const {
+    data: salesData,
+    isLoading: salesLoading,
+    isError: salesIsError,
+    error: salesError,
+  } = useQuery<{
     sales: Array<{
       id: string;
       source: "legacy" | "order";
@@ -103,6 +113,10 @@ export default function StockDetails() {
       queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
       queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
       toast({
         title: "Сохранено",
         description: "Изменения успешно сохранены",
@@ -130,10 +144,12 @@ export default function StockDetails() {
 
   const handleEditSave = () => {
     if (editingCell) {
+      const normalizedValue =
+        editingCell.field === "note" ? (editValue.trim().length > 0 ? editValue : null) : editValue.trim();
       updateMutation.mutate({
         id: editingCell.id,
         field: editingCell.field,
-        value: editValue || null,
+        value: normalizedValue,
       });
     }
   };
@@ -161,7 +177,7 @@ export default function StockDetails() {
       if (!transferToBox) throw new Error("Выберите коробку назначения");
 
       const qty = Number(transferQty);
-      if (!Number.isFinite(qty) || qty <= 0) {
+      if (!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) {
         throw new Error("Количество должно быть положительным");
       }
       if (transferMax > 0 && qty > transferMax) {
@@ -188,6 +204,10 @@ export default function StockDetails() {
       queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
 
       toast({
         title: "Перемещение выполнено",
@@ -285,6 +305,11 @@ export default function StockDetails() {
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-10 w-full" />
                 ))}
+              </div>
+            ) : stockInfoError ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                Не удалось загрузить распределение по коробкам:{" "}
+                {stockInfoErr instanceof Error ? stockInfoErr.message : "ошибка запроса"}
               </div>
             ) : !stockInfo || !stockInfo.existed ? (
               <p className="text-sm text-muted-foreground">Нет данных по этому SMART</p>
@@ -393,6 +418,11 @@ export default function StockDetails() {
                 {[1, 2, 3, 4].map((i) => (
                   <Skeleton key={i} className="h-12 w-full" />
                 ))}
+              </div>
+            ) : purchasesIsError ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                Не удалось загрузить историю покупок:{" "}
+                {purchasesError instanceof Error ? purchasesError.message : "ошибка запроса"}
               </div>
             ) : !purchases || purchases.length === 0 ? (
               <div className="text-center py-12">
@@ -573,6 +603,10 @@ export default function StockDetails() {
                 </div>
                 <Skeleton className="h-64" />
               </div>
+            ) : salesIsError ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+                Не удалось загрузить аналитику продаж: {salesError instanceof Error ? salesError.message : "ошибка запроса"}
+              </div>
             ) : salesData && salesData.sales.length > 0 ? (
               <div className="space-y-6">
                 {/* Metrics Cards */}
@@ -736,9 +770,13 @@ export default function StockDetails() {
                 <Input
                   type="number"
                   min={1}
+                  step={1}
                   max={transferMax}
                   value={transferQty}
-                  onChange={(e) => setTransferQty(Number(e.target.value) || 1)}
+                  onChange={(e) => {
+                    const parsed = Number.parseInt(e.target.value, 10);
+                    setTransferQty(Number.isFinite(parsed) ? parsed : 1);
+                  }}
                   data-testid="input-transfer-qty"
                 />
               </div>

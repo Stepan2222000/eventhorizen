@@ -1,97 +1,289 @@
 meta:
-  target: feature/sold-out
-  created: 2026-02-10
-  last_updated: 2026-02-10T14:40:45Z
-  agent: validator-1
-  files:
-    - client/src/pages/sold-out.tsx
-    - client/src/lib/queryClient.ts
-    - client/src/App.tsx
-    - py_backend/routes.py
-    - py_backend/storage.py
-    - py_backend/types.py
-    - shared/schema.ts
+  target: client/src/pages/sold-out.tsx
+  created: 2026-02-11
+  last_updated: 2026-02-11T20:40:50Z
 
 errors:
-  - id: e-soldout-0001
+  - id: e-soldout-001
     file: py_backend/storage.py
-    category: logic-error
+    category: spec-mismatch
     severity: warning
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      `getSoldOutItems()` считает `avg_sale_price` как `AVG(sale_price)` по движениям продажи.
-      Это среднее по "операциям", а не по количеству проданных единиц.
+      `lastSaleDate` формируется в UTC через `toDateIso()`, но на клиенте
+      отображается через `new Date(...)/format(...)` в таймзоне браузера.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      При продажах разными партиями средняя цена будет заметно искажена.
-      Реалистичный пример:
-      - продали 10 шт по 100
-      - продали 1 шт по 200
-      Сейчас средняя = (100 + 200) / 2 = 150, хотя средняя по штукам должна быть (100*10 + 200*1) / 11 ≈ 109.09.
+      Для пользователей не в московской таймзоне дата последней продажи
+      может сместиться на предыдущий/следующий день. На странице "Распроданные товары"
+      это даёт неверную бизнес-дату.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Средняя цена продажи должна быть взвешенной по количеству:
-      `SUM(sale_price * ABS(qty_delta)) / SUM(ABS(qty_delta))`.
+      Дата должна отображаться в одной фиксированной бизнес-таймзоне
+      (Москва), либо сервер должен отдавать уже "date-only" поле без
+      повторной интерпретации на клиенте.
 
     code_example: |
-      # py_backend/storage.py (getSoldOutItems)
-      AVG(CAST(sale_price AS NUMERIC)) as avg_sale_price,
-
-      # Вариант исправления (идея)
-      (SUM(CAST(sale_price AS NUMERIC) * ABS(qty_delta)) / NULLIF(SUM(ABS(qty_delta)), 0)) as avg_sale_price
+      # Проблемный код:
+      # py_backend/storage.py
+      # "lastSaleDate": toDateIso(_obj_get(row, "last_sale_date"))
+      #
+      # client/src/pages/sold-out.tsx
+      # format(new Date(item.lastSaleDate), "dd.MM.yyyy", { locale: ru })
+      #
+      # Как исправить:
+      # 1) Форматировать в фиксированной зоне Europe/Moscow на клиенте, или
+      # 2) Отдавать из API отдельное поле вида "lastSaleDateLocal": "2026-02-11".
 
     found_count: 1
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T14:32:14Z
+        timestamp: 2026-02-11T20:21:53Z
         agrees: true
-        note: "Раунд 2: очевидная логическая ошибка в агрегации."
+        note: "Раунды 3-5: подтверждено на стыке py_backend/storage.py и client/src/pages/sold-out.tsx"
 
     fix: null
 
-  - id: e-soldout-0002
-    file: client/src/pages/sold-out.tsx
+  - id: e-soldout-002
+    file: py_backend/storage.py
+    category: logic-error
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Средняя цена продажи в `getSoldOutItems()` считается так:
+      SUM(COALESCE(sale_price, 0) * ABS(qty_delta)) / SUM(ABS(qty_delta)).
+      Продажи с `sale_price = NULL` попадают в знаменатель как обычные продажи,
+      но в числитель как нулевая цена.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Legacy-данные (до добавления колонки sale_price) и любые записи с NULL
+      систематически занижают `avgSalePrice`. Страница показывает неверную
+      аналитику по распроданным товарам.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нельзя подставлять 0 для отсутствующей цены продажи.
+      Либо исключать такие строки из расчёта средней,
+      либо иметь отдельный fallback-источник цены.
+
+    code_example: |
+      # Проблемный код:
+      # SUM(CAST(COALESCE(sale_price, 0) AS NUMERIC) * ABS(qty_delta))
+      # / NULLIF(SUM(ABS(qty_delta)), 0)
+      #
+      # Как исправить:
+      # SUM(CASE WHEN sale_price IS NOT NULL THEN sale_price * ABS(qty_delta) ELSE 0 END)
+      # /
+      # NULLIF(SUM(CASE WHEN sale_price IS NOT NULL THEN ABS(qty_delta) ELSE 0 END), 0)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:21:53Z
+        agrees: true
+        note: "Раунды 2-5: подтверждено по SQL в getSoldOutItems() и истории схемы inventory.movements"
+
+    fix: null
+
+  - id: e-soldout-003
+    file: py_backend/routes.py
     category: error-handling
     severity: warning
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      Страница обрабатывает только `isLoading`. Если запрос упал (500/сеть),
-      React Query выставит `isError=true`, но `items` останется `undefined`.
-      Код воспринимает это как "нет распроданных товаров" и показывает пустое состояние.
+      Эндпоинт GET /api/sold-out ловит все исключения и всегда отдаёт
+      общий текст "Failed to get sold out items" без детализации.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      При любой ошибке API пользователь увидит ложный "0 результатов",
-      вместо сообщения об ошибке и возможности повторить запрос.
+      При повторяемых продовых ошибках (например, ошибка SQL или проблемы пула)
+      диагностика затягивается: у клиента одинаковая ошибка, на уровне API
+      не сохраняется контекст конкретного падения.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Явно обрабатывать ошибку (`isError`/`error`) и показывать понятный UI-стейт:
-      "не удалось загрузить" + кнопка retry.
+      Возвращать безопасный текст клиенту, но логировать внутреннюю причину
+      на сервере (structured logging, traceback, request context).
 
     code_example: |
-      const { data: items, isLoading } = useQuery<SoldOutItem[]>({
-        queryKey: ['/api/sold-out'],
-      });
-
-      ...
-      {!items || items.length === 0 ? (
-        <Card>...Нет распроданных товаров...</Card>
-      ) : (
-        ...
-      )}
+      # Проблемный код:
+      # except Exception:
+      #     return JSONResponse(status_code=500, content={"error": "Failed to get sold out items"})
+      #
+      # Как исправить:
+      # except Exception as err:
+      #     logger.exception("GET /api/sold-out failed: %s", err)
+      #     return JSONResponse(status_code=500, content={"error": "Failed to get sold out items"})
 
     found_count: 1
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T14:32:14Z
+        timestamp: 2026-02-11T20:21:53Z
         agrees: true
-        note: "Раунд 2: ошибка маскируется под пустой список."
+        note: "Раунды 3-5: подтверждено в обработчике GET /api/sold-out"
 
     fix: null
 
-improvements: []
+  - id: e-soldout-004
+    file: client/src/pages/sold-out.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница использует React Query c глобальными настройками
+      `staleTime: Infinity` и `refetchOnWindowFocus: false`.
+      На самой странице нет ручного refresh.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если данные изменились вне текущей вкладки (другая вкладка, API-скрипт,
+      внешняя операция), UI продолжает показывать старые строки.
+      Практически воспроизведено:
+      - API `/api/sold-out` уже вернул `[]`
+      - страница продолжала показывать `Найдено записей: 1`
+      - обновилось только после hard reload.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужен способ принудительного обновления данных:
+      кнопка "Обновить", `refetchOnMount`, либо периодический refetch
+      для аналитических страниц.
+
+    code_example: |
+      # Проблемный код:
+      # client/src/lib/queryClient.ts
+      # staleTime: Infinity
+      # refetchOnWindowFocus: false
+      #
+      # client/src/pages/sold-out.tsx
+      # useQuery<SoldOutItem[]>({ queryKey: ['/api/sold-out'] })
+      #
+      # Как исправить:
+      # Добавить ручной refetch на странице или включить refetchOnMount для этого query.
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:40:50Z
+        agrees: true
+        note: |
+          Практический e2e сценарий через agent-browser подтверждён.
+          Доказательства:
+          - lab/validation/agent-browser-deep-validate-soldout/soldout-with-row.png
+          - lab/validation/agent-browser-deep-validate-soldout/soldout-stale-after-api-change.png
+          - lab/validation/agent-browser-deep-validate-soldout/soldout-after-reload-empty.png
+
+    fix: null
+
+  - id: e-soldout-005
+    file: client/src/pages/sold-out.tsx
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При сетевой ошибке страница показывает сырое сообщение браузера
+      `Failed to fetch` через `error.message`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Интерфейс в целом русскоязычный, но в ошибочном сценарии пользователь
+      видит англоязычный технический текст без подсказки, что делать дальше.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для сетевых/транспортных ошибок показывать локализованный fallback
+      (например: "Не удалось загрузить распроданные товары. Проверьте соединение.")
+      и кнопку повтора.
+
+    code_example: |
+      # Проблемный код:
+      # {error instanceof Error ? error.message : "Ошибка загрузки распроданных товаров"}
+      #
+      # Как исправить:
+      # Маппить сетевые ошибки на русскоязычное сообщение + retry.
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:40:50Z
+        agrees: true
+        note: |
+          Практически воспроизведено через agent-browser с network abort.
+          Скриншот:
+          - lab/validation/agent-browser-deep-validate-soldout/soldout-error-failed-fetch.png
+
+    fix: null
+
+improvements:
+  - id: i-soldout-001
+    file: client/src/pages/sold-out.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Паттерны loading/error/empty для аналитических таблиц почти
+      дублируются между sold-out и top-parts страницами.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Любое изменение UX-состояний нужно вносить в нескольких файлах.
+      Повышается риск рассинхрона поведения и текстов.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий компонент состояния таблицы (loading/error/empty)
+      и переиспользовать его для `/sold-out` и `/top-parts`.
+
+    code_example: |
+      # Текущий код:
+      # client/src/pages/sold-out.tsx и client/src/pages/top-parts.tsx
+      # содержат похожие ветки if (isLoading), if (isError), if empty.
+      #
+      # Как улучшить:
+      # Создать общий компонент, например AnalyticsTableState.
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:21:53Z
+        note: "Раунд 4: обнаружено дублирование состояния страниц аналитики"
+
+    fix: null
+
+  - id: i-soldout-002
+    file: py_backend/storage.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      GET /api/sold-out возвращает полный список без ограничения/пагинации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При росте каталога возрастает время SQL + сериализации + рендера таблицы.
+      На клиенте это может давать заметные лаги при открытии страницы.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить limit/offset (или cursor) в API и соответствующий UI-пейджинг.
+      Для начального шага — хотя бы server-side `limit` с сортировкой.
+
+    code_example: |
+      # Текущий код:
+      # SELECT ... FROM sales_summary ... ORDER BY s.last_sale_date DESC
+      # (без LIMIT/OFFSET)
+      #
+      # Как улучшить:
+      # Добавить LIMIT/OFFSET параметры в запрос и endpoint.
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:21:53Z
+        note: "Раунд 4: архитектурная оптимизация чтения аналитики"
+
+    fix: null

@@ -9,7 +9,7 @@ import { ru } from "date-fns/locale";
 import { PackageX } from "lucide-react";
 
 export default function SoldOut() {
-  const { data: items, isLoading } = useQuery<SoldOutItem[]>({
+  const { data: items, isLoading, isError, error } = useQuery<SoldOutItem[]>({
     queryKey: ['/api/sold-out'],
   });
 
@@ -21,6 +21,18 @@ export default function SoldOut() {
           <Skeleton className="h-4 w-96" />
           <Skeleton className="h-64 w-full" />
         </div>
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Распроданные товары" description="Товары с нулевым остатком">
+        <Card>
+          <CardContent className="py-10 text-sm text-destructive">
+            {error instanceof Error ? error.message : "Ошибка загрузки распроданных товаров"}
+          </CardContent>
+        </Card>
       </Page>
     );
   }

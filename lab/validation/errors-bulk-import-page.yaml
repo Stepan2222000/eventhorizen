@@ -1,0 +1,528 @@
+meta:
+  target: "client/src/pages/bulk-import.tsx + py_backend/routes.py + py_backend/storage.py"
+  created: 2026-02-11
+  last_updated: 2026-02-11T20:39:00Z
+
+errors:
+  - id: e-1f9c01
+    file: py_backend/routes.py
+    category: logic-error
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В parse_csv_text() ветка для '\r\n' просто пропускает оба символа
+      без push_field()/push_row().
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      CSV из Excel/Windows обычно использует CRLF. В этом случае все строки
+      склеиваются в одну, заголовки ломаются, импорт даёт массовые ошибки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      И '\n', и '\r\n' должны завершать текущую строку одинаково
+      (push_field + push_row).
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:117-125):
+      if ch == "\r":
+          nxt = text[i + 1] if i + 1 < len(text) else None
+          if nxt == "\n":
+              i += 1
+          else:
+              push_field()
+              push_row()
+          i += 1
+          continue
+
+      # Воспроизведение:
+      parse_csv_text("smart,qty_delta,reason\r\nsmart_1,1,purchase\r\n")
+      # Фактически: одна склеенная строка
+
+      # Как исправить:
+      if ch == "\r":
+          push_field()
+          push_row()
+          if i + 1 < len(text) and text[i + 1] == "\n":
+              i += 1
+          i += 1
+          continue
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:18:30Z
+        agrees: true
+        note: "Подтверждено запуском parse_csv_text() на CRLF-входе."
+      - agent: validator-1
+        timestamp: 2026-02-11T20:33:10Z
+        agrees: true
+        note: "Подтверждено e2e: valid-crlf.csv через agent-browser дал Результаты 0/0/0 вместо импорта 1 строки."
+
+    fix: null
+
+  - id: e-2a44b0
+    file: py_backend/routes.py
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      CSV всегда декодируется как UTF-8, а заголовки просто trim() без
+      удаления BOM.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      CSV с UTF-8 BOM (частый экспорт) даёт заголовок '\ufeffsmart' вместо smart.
+      Маппинг не находит поле smart, и каждая строка падает с ошибкой
+      про обязательный SMART код.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      BOM должен удаляться до маппинга (например, decode('utf-8-sig')
+      или нормализация первого заголовка).
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:1237,1242):
+      csv_text = content.decode("utf-8")
+      headers = [h.strip() for h in table[0]]
+
+      # Воспроизведение:
+      headers = ["\ufeffsmart", "qty_delta", "reason"]
+      # parse_bulk_import_rows_from_objects -> smart = ""
+
+      # Как исправить:
+      csv_text = content.decode("utf-8-sig")
+      # либо headers[0] = headers[0].lstrip("\ufeff")
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:19:10Z
+        agrees: true
+        note: "Подтверждено локальным вызовом parse_bulk_import_rows_from_objects."
+      - agent: validator-1
+        timestamp: 2026-02-11T20:33:20Z
+        agrees: true
+        note: "Подтверждено e2e: valid-bom.csv через agent-browser -> 'Строка 2: SMART код обязательно'."
+
+    fix: null
+
+  - id: e-3b8812
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      parse_bulk_import_rows_from_objects() проверяет только фиксированные
+      варианты ключей ("smart", "SMART", "qty_delta", "qtyDelta", ...).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В документации заявлен case-insensitive маппинг. Заголовки вида
+      "Smart"/"QTY_DELTA"/"Reason" не попадут в маппинг и дадут ошибки
+      валидации или нулевые значения.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Перед маппингом ключи нужно нормализовать к нижнему регистру.
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:222-225):
+      smart = pick_row_value(obj, ["smart", "SMART"])
+      qty_delta = pick_row_value(obj, ["qty_delta", "qtyDelta", "qty"])
+
+      # Спецификация (lab/data-structure.md:1216):
+      # "Входные ключи (case-insensitive)"
+
+      # Как исправить:
+      normalized = {str(k).lower(): v for k, v in obj.items()}
+      smart = normalized.get("smart")
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:20:00Z
+        agrees: true
+        note: "Несоответствие между docs и реализацией."
+      - agent: validator-1
+        timestamp: 2026-02-11T20:33:30Z
+        agrees: true
+        note: "Подтверждено e2e: mixed-case-headers.csv -> SMART пустой, qtyDelta=0, reason пустой."
+
+    fix: null
+
+  - id: e-4f190a
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Весь bulk_import() обёрнут в общий except с ответом 500
+      "Failed to process bulk import".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Ожидаемые пользовательские ошибки (неверная кодировка CSV, битый XLSX,
+      ошибки парсинга данных) превращаются в 500 без диагностической причины.
+      Пользователь не понимает, как исправить файл.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для предсказуемых ошибок парсинга/валидации нужен 400 с понятным message.
+      500 оставлять только для серверных сбоев.
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:1268-1269):
+      except Exception:
+          return JSONResponse(status_code=500, content={"error": "Failed to process bulk import"})
+
+      # Как исправить:
+      # - ловить UnicodeDecodeError / ValueError / xlrd/openpyxl exceptions отдельно -> 400
+      # - сохранять 500 только для непредвиденных ошибок
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:20:40Z
+        agrees: true
+        note: "Высокая вероятность на реальных пользовательских CSV/XLSX."
+      - agent: validator-1
+        timestamp: 2026-02-11T20:33:40Z
+        agrees: true
+        note: "Подтверждено e2e: cp1251.csv через agent-browser вернуло generic 500 'Failed to process bulk import'."
+
+    fix: null
+
+  - id: e-5d02e7
+    file: client/src/pages/bulk-import.tsx
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В UI таблице полей box_number и note отмечены как 'Опционально',
+      а пояснение правил покрывает не все обязательные условия backend.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь загружает файл по UI-подсказке, но сервер отклоняет строки:
+      - sale/writeoff/adjust без box_number;
+      - adjust без note.
+      Это массово увеличивает ошибки импорта.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      UI-подсказка должна полностью совпадать с validateAndSanitizeForInsert()
+      и спецификацией правил валидации.
+
+    code_example: |
+      # UI (client/src/pages/bulk-import.tsx:283-285):
+      <span>box_number</span>
+      <Badge ...>Опционально</Badge>
+
+      # Backend (py_backend/storage.py:485,506,524):
+      # sale/writeoff/adjust требуют boxNumber
+      # adjust требует note (line 521)
+
+      # Как исправить:
+      # Обновить "Ожидаемый формат" и текст правил под фактическую валидацию backend.
+
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:21:20Z
+        agrees: true
+        note: "Сравнено с validateAndSanitizeForInsert()."
+      - agent: validator-1
+        timestamp: 2026-02-11T20:33:50Z
+        agrees: true
+        note: "Подтверждено e2e: adjust-no-note.csv -> 'Строка 2: Примечание обязательно' при UI-метке note='Опционально'."
+
+    fix: null
+
+  - id: e-6c7a11
+    file: py_backend/routes.py
+    category: missing-binding
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для шагов bulk-import из проектной спецификации нет @alg:-маркеров
+      в коде маршрутов.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Теряется трассировка "спека -> код" при изменениях, выше риск
+      скрытых регрессий и drift между документами и реализацией.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Ключевые шаги импорта (парсинг CSV/XLSX, маппинг, шаблон) должны быть
+      помечены @alg: и связаны с единым алгоритм-реестром.
+
+    code_example: |
+      # Факт:
+      rg -n "@alg:" py_backend/routes.py
+      # -> пусто
+
+      # Как исправить:
+      # Добавить @alg: маркеры на:
+      # - parse_csv_text
+      # - parse_bulk_import_rows_from_objects
+      # - bulk_import
+      # - import_template
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:22:00Z
+        agrees: true
+        note: "Проверено rg-поиском; маркеры отсутствуют."
+
+    fix: null
+
+  - id: e-7f33dd
+    file: py_backend/storage.py
+    category: missing-binding
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В критических методах импорта (processBulkImport, validateAndSanitizeForInsert,
+      createMovement/createMovementAttempt) нет @alg:-привязок.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При изменении бизнес-правил сложно быстро проверить, какой именно участок
+      кода покрывает каждый шаг спецификации.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Добавить явные @alg:-маркеры на этапах row-level валидации и записи движения.
+
+    code_example: |
+      # Факт:
+      rg -n "@alg:" py_backend/storage.py
+      # -> пусто
+
+      # Как исправить:
+      # Привязать @alg: к processBulkImport() и validateAndSanitizeForInsert().
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:22:20Z
+        agrees: true
+        note: "Отсутствие трассировки в критичном бизнес-коде."
+
+    fix: null
+
+  - id: e-8a7c2d
+    file: py_backend/routes.py
+    category: spec-mismatch
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      GET /api/import-template генерирует пример с жёстко заданной коробкой "K-123"
+      для всех строк шаблона.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В окружениях, где коробка K-123 отсутствует/неактивна, официальный шаблон
+      не импортируется: каждая строка падает с "Коробка не найдена: K-123".
+      Пользователь получает "шаблон от системы", который сразу нерабочий.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Примеры в шаблоне должны быть импортируемыми с текущими правилами:
+      использовать существующую активную коробку или явную подсказку, что нужно
+      заменить box_number перед импортом.
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:1302,1312,1319,1327):
+      "box_number": "K-123",
+
+      # Комментарий в коде (py_backend/routes.py:1295):
+      # "Keep examples importable with the current validation rules"
+
+      # Подтверждение e2e:
+      # 1) Скачать шаблон с /api/import-template
+      # 2) Загрузить без изменений на /import
+      # 3) Результат: 4/0/4 + "Коробка не найдена: K-123" на каждой строке
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:34:20Z
+        agrees: true
+        note: "Подтверждено agent-browser на inventory-import-template.xlsx."
+
+    fix: null
+
+  - id: e-9b113e
+    file: py_backend/routes.py
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для CSV после парсинга не проверяется случай "есть только заголовки и нет data-rows".
+      Сервер возвращает 200 с результатом totalRows=0/imported=0/errors=0.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь получает тихий no-op без явной ошибки, думая, что импорт прошёл.
+      При этом для аналогичного XLSX (только заголовки) сервер корректно даёт
+      ошибку "Empty Excel sheet" (400). Поведение форматов расходится.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      CSV и XLSX должны одинаково валидировать отсутствие data-rows:
+      возвращать 400 с понятной причиной.
+
+    code_example: |
+      # CSV ветка (py_backend/routes.py:1243-1252):
+      # raw_objects может остаться пустым, но check отсутствует
+      rows = parse_bulk_import_rows_from_objects(raw_objects)
+
+      # XLSX ветка (py_backend/routes.py:1233-1234):
+      if len(raw_rows) == 0:
+          return JSONResponse(status_code=400, content={"error": "Empty Excel sheet"})
+
+      # Подтверждение e2e:
+      # - header-only.csv -> Результаты 0/0/0 (200)
+      # - header-only.xlsx -> Ошибка импорта {"error":"Empty Excel sheet"}
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:37:40Z
+        agrees: true
+        note: "Подтверждено практическими прогонами в agent-browser."
+
+    fix: null
+
+  - id: e-a12f40
+    file: client/src/pages/bulk-import.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При !response.ok клиент бросает Error(await response.text()).
+      Если backend возвращает JSON-ошибку, в UI показывается сырая JSON-строка.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В toast пользователь видит технический текст вида
+      {"error":"Empty Excel sheet"} или {"error":"Failed to process bulk import"}
+      вместо нормального сообщения.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Клиент должен парсить JSON-ошибку и показывать человеко-понятный message
+      (поле error), с fallback на text только при непарсируемом ответе.
+
+    code_example: |
+      # Проблемный код (client/src/pages/bulk-import.tsx:30-32):
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      # Подтверждение e2e:
+      # - header-only.xlsx -> toast: {"error":"Empty Excel sheet"}
+      # - cp1251.csv -> toast: {"error":"Failed to process bulk import"}
+
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:38:10Z
+        agrees: true
+        note: "Подтверждено agent-browser на двух негативных кейсах."
+
+    fix: null
+
+improvements:
+  - id: i-dry01
+    file: client/src/pages/bulk-import.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Правила обязательности полей дублируются вручную в UI-тексте и отдельно
+      в backend-валидации.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Уже возник drift: UI сообщает одно, backend валидирует другое.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Хранить правила в одном источнике (например, schema/endpoint с metadata),
+      а UI рендерить по этим данным.
+
+    code_example: |
+      # UI-описание:
+      client/src/pages/bulk-import.tsx:257-309
+
+      # Фактическая валидация:
+      py_backend/storage.py:460-538
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:23:00Z
+        note: "DRY-нарушение уже вызвало реальное несоответствие."
+
+    fix: null
+
+  - id: i-dead01
+    file: client/src/pages/bulk-import.tsx
+    category: dead-code
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Импортируется apiRequest, но нигде не используется.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишний импорт создаёт шум и вводит в заблуждение о реальном пути
+      сетевых запросов страницы.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Удалить неиспользуемый импорт или унифицировать вызовы на apiRequest.
+
+    code_example: |
+      # Текущий код:
+      import { apiRequest } from "@/lib/queryClient";
+      # Далее в файле используется fetch(...)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:23:20Z
+        note: "Без влияния на рантайм, но ухудшает поддержку."
+
+    fix: null
+
+  - id: i-sub01
+    file: client/src/pages/bulk-import.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      invalidateQueries вызывается длинной серией вручную по одному ключу.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Трудно поддерживать, легко забыть новый зависимый кэш, много повторов.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести ключи в массив и итерироваться, либо сделать общий helper
+      invalidateAfterInventoryMutation(queryClient).
+
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      ...
+      queryClient.invalidateQueries({ queryKey: [`/api/top-parts?mode=combined`] });
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:23:40Z
+        note: "Поддерживаемость и риск пропуска инвалидации."
+
+    fix: null

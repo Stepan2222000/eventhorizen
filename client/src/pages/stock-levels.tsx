@@ -20,7 +20,7 @@ export default function StockLevels() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  const { data: stockLevels, isLoading } = useQuery({
+  const { data: stockLevels, isLoading, isError, error } = useQuery({
     queryKey: ["/api/stock"],
   });
 
@@ -180,6 +180,12 @@ export default function StockLevels() {
                         <TableCell><Skeleton className="h-8 w-16 ml-auto" /></TableCell>
                       </TableRow>
                     ))
+                  ) : isError ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center py-8 text-destructive">
+                        {error instanceof Error ? error.message : "Не удалось загрузить остатки"}
+                      </TableCell>
+                    </TableRow>
                   ) : filteredStock.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
@@ -205,26 +211,28 @@ export default function StockLevels() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-2">
-                              <Link href={`/stock/${item.smart}`}>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  data-testid={`button-view-${item.smart}`}
-                                >
+                              <Button
+                                asChild
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                data-testid={`button-view-${item.smart}`}
+                              >
+                                <Link href={`/stock/${item.smart}`}>
                                   <i className="fas fa-eye text-xs"></i>
-                                </Button>
-                              </Link>
-                              <Link href={`/movement?smart=${encodeURIComponent(item.smart)}`}>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 w-8 p-0"
-                                  data-testid={`button-add-movement-${item.smart}`}
-                                >
+                                </Link>
+                              </Button>
+                              <Button
+                                asChild
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0"
+                                data-testid={`button-add-movement-${item.smart}`}
+                              >
+                                <Link href={`/movement?smart=${encodeURIComponent(item.smart)}`}>
                                   <i className="fas fa-plus text-xs"></i>
-                                </Button>
-                              </Link>
+                                </Link>
+                              </Button>
                             </div>
                           </TableCell>
                         </TableRow>
@@ -235,7 +243,7 @@ export default function StockLevels() {
               </Table>
             </div>
             
-            {!isLoading && (
+            {!isLoading && !isError && (
               <div className="flex items-center justify-between px-2 py-4">
                 <div className="text-sm text-muted-foreground">
                   Показано <span className="font-semibold text-foreground">{filteredStock.length}</span> позиций

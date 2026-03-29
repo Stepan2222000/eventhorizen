@@ -1,0 +1,368 @@
+meta:
+  target: customer-page-module
+  scope:
+    - client/src/pages/customers.tsx
+    - client/src/pages/customer-details.tsx
+    - client/src/lib/queryClient.ts
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - shared/schema.ts
+  created: 2026-02-11
+  last_updated: 2026-02-11T20:35:03Z
+  agent: validator-codex-1
+  notes:
+    - "our/algorithms.yaml не найден; проверка @alg привязок недоступна для этого раунда."
+
+errors:
+  - id: e-cust-001
+    file: py_backend/storage.py
+    category: logic-error
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В updateCustomer значение archived приводится через bool(...).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для payload {"archived": "false"} Python вернет bool("false") == True,
+      и клиент будет ошибочно архивирован. Для {"archived": null} произойдет
+      принудительное разархивирование. Это ломает бизнес-состояние карточек клиентов.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Поле archived должно валидироваться строго как boolean (или reject с 400),
+      без truthy/falsy coercion.
+
+    code_example: |
+      # Проблемный код (py_backend/storage.py:2262):
+      if "archived" in data:
+          if bool(data.get("archived")):
+              set_clauses.append("archived_at = COALESCE(archived_at, NOW())")
+          else:
+              set_clauses.append("archived_at = NULL")
+
+      # Как исправить:
+      archived = requireStrictBool(data.get("archived"), "archived")
+      if archived:
+          set_clauses.append("archived_at = COALESCE(archived_at, NOW())")
+      else:
+          set_clauses.append("archived_at = NULL")
+
+    found_count: 2
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        agrees: true
+        note: "Раунд 3 + Раунд 5: подтверждено повторным чтением updateCustomer."
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:35:03Z
+        agrees: true
+        note: |
+          Практически подтверждено через agent-browser eval:
+          PATCH /api/customers/8 с {"archived":"false"} вернул 200
+          и archivedAt стал непустым (клиент архивирован вместо разархивирования).
+          PATCH /api/customers/8 с {"archived":null} вернул 200 и снял архив.
+
+    fix: null
+
+  - id: e-cust-002
+    file: py_backend/storage.py
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В getOrders флаг includeArchivedCustomers приводится через bool(...).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Строка "false" также truthy и включает архивных клиентов в выборку заказов.
+      Это дает некорректный набор данных и рассинхрон с ожиданиями API-контракта.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Флаг includeArchivedCustomers должен нормализоваться строго и предсказуемо
+      (bool/0/1/true/false через requireStrictBool либо заранее валидированный bool).
+
+    code_example: |
+      # Проблемный код (py_backend/storage.py:2642):
+      include_archived = bool(options_data.get("includeArchivedCustomers"))
+
+      # Как исправить:
+      raw_include = options_data.get("includeArchivedCustomers")
+      include_archived = (
+          requireStrictBool(raw_include, "includeArchivedCustomers")
+          if raw_include is not None
+          else False
+      )
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        agrees: true
+        note: "Раунд 4: подтверждено по цепочке routes.get_orders -> storage.getOrders."
+
+    fix: null
+
+  - id: e-cust-003
+    file: py_backend/routes.py
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      get_customer_by_id запрашивает список заказов и затем последовательно
+      вызывает getOrderById для каждого заказа в цикле.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для клиентов с большим числом заказов получается N+1 каскад запросов,
+      и время ответа быстро растет. На реальных данных это дает долгие ответы,
+      timeouts и 500 на карточке клиента.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Статистика клиента должна считаться агрегатным SQL или батч-запросом
+      без поштучного full-detail чтения каждого заказа.
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:333):
+      for order in orders:
+          order_id = order.get("id")
+          ...
+          details = await storage.getOrderById(order_id)
+          ...
+
+      # Как исправить:
+      # Вынести расчет stats в storage:
+      # await storage.getCustomerStats(cid)
+      # и вернуть агрегат одним запросом.
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        agrees: true
+        note: "Раунд 3: сценарий 100+ заказов даёт предсказуемую деградацию."
+
+    fix: null
+
+  - id: e-cust-004
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Весь блок загрузки клиента и расчета статистики обернут в единый try/except.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Сбой на одном заказе (или временная ошибка в getOrderById) превращает
+      весь endpoint /api/customers/{id} в 500, хотя сам клиент и часть заказов
+      могут быть валидны. Пользователь теряет доступ к карточке полностью.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Локальные ошибки детализации должны изолироваться, а endpoint должен
+      отдавать доступные данные клиента и безопасную частичную статистику.
+
+    code_example: |
+      # Проблемный код (py_backend/routes.py:325-358):
+      try:
+          customer = await storage.getCustomerById(cid)
+          ...
+          for order in orders:
+              details = await storage.getOrderById(order_id)
+              ...
+          return JSONResponse(...)
+      except Exception:
+          return JSONResponse(status_code=500, content={"error": "Failed to get customer"})
+
+      # Как исправить:
+      # Ловить ошибки по месту (внутри цикла / в storage)
+      # и возвращать частично деградированный, но валидный ответ.
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        agrees: true
+        note: "Раунд 5: подтверждено как высоковероятная деградация при проблемных данных."
+
+    fix: null
+
+  - id: e-cust-005
+    file: py_backend/storage.py
+    category: data-loss
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      createCustomer/updateCustomer принимают phone и note без строгой типовой
+      валидации. Если приходит не-строка (object/array/number), поле молча
+      приводится к None и сохраняется как NULL.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Клиентская ошибка сериализации не проявится как 400, а приведет к тихой
+      потере данных. Интеграции будут считать, что данные сохранены корректно,
+      хотя phone/note фактически сброшены.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Некорректный тип phone/note должен приводить к 400 с понятной ошибкой,
+      а не к silent coercion в NULL.
+
+    code_example: |
+      # Проблемный код (py_backend/storage.py:2224-2225, 2255-2260):
+      phone = phone_raw.strip() if isinstance(phone_raw, str) and phone_raw.strip() else None
+      note = note_raw.strip() if isinstance(note_raw, str) and note_raw.strip() else None
+
+      # Как исправить:
+      # 1) Валидировать request по CreateCustomerInput/UpdateCustomerInput в routes.py
+      # 2) Либо явно reject не-строковые phone/note в storage (InvalidRequestError).
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:35:03Z
+        agrees: true
+        note: |
+          Практически подтверждено через agent-browser eval:
+          POST /api/customers с {"name":"AB-VAL-CUST-TYPE-01","phone":{"x":1},"note":[1,2]}
+          вернул 201, но phone/note сохранены как null.
+          PATCH /api/customers/9 с {"phone":{"a":1},"note":[1]} вернул 200 и тоже сохранил null.
+
+    fix: null
+
+improvements:
+  - id: i-cust-001
+    file: client/src/pages/customers.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Поиск клиентов отправляет запрос на каждый символ без debounce.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Лишняя нагрузка на backend при быстром вводе
+      - Лишние сетевые round-trip и перерисовки
+      - Деградация UX на медленной сети
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Добавить debounce 250-400ms перед изменением queryKey (или useDeferredValue).
+
+    code_example: |
+      # Текущий код (client/src/pages/customers.tsx:181):
+      onChange={(e) => setSearch(e.target.value)}
+
+      # Как улучшить:
+      # setRawSearch(...) + debounce -> setSearch(...)
+
+    found_count: 1
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        note: "Раунд 4: архитектурная оптимизация без изменения бизнес-логики."
+    fix: null
+
+  - id: i-cust-002
+    file: client/src/pages/customers.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика invalidateQueries с одинаковым predicate дублируется в нескольких
+      местах (customers.tsx, customer-details.tsx, sold-items.tsx).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Сложнее поддерживать список ключей
+      - Риск расхождения поведения между страницами
+      - Легко забыть обновить одно место при изменениях кэша
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести в общий helper:
+      invalidateCustomerRelatedQueries(queryClient).
+
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
+
+    found_count: 1
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        note: "Раунд 4: повторяемый паттерн инвалидации."
+    fix: null
+
+  - id: i-cust-003
+    file: py_backend/routes.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Расчет stats клиента делается в роуте, а не в storage/SQL.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Смешение транспортного и бизнес-слоя
+      - Сложно тестировать отдельно
+      - Тяжелая логика в HTTP-обработчике
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести агрегирование в storage как отдельный метод
+      и вернуть в роуте только orchestration.
+
+    code_example: |
+      # Текущий код:
+      # routes.py:get_customer_by_id содержит бизнес-расчет totalAmount/returnsCount.
+
+      # Как улучшить:
+      # storage.getCustomerStats(customer_id) -> dict
+
+    found_count: 1
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        note: "Раунд 4: нарушение разделения ответственности."
+    fix: null
+
+  - id: i-cust-004
+    file: py_backend/routes.py
+    category: kiss-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В get_customer_by_id сначала берутся краткие orders, потом для статистики
+      заново тянутся полные details каждого заказа.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      - Избыточные данные и лишняя сложность контура
+      - Увеличение количества сетевых/DB операций
+      - Более сложная обработка ошибок
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Нужные агрегаты считать по минимальному набору полей, без full details.
+
+    code_example: |
+      # Текущий код:
+      orders = await storage.getOrders(...)
+      for order in orders:
+          details = await storage.getOrderById(order_id)
+
+      # Как улучшить:
+      # Один агрегатный запрос по order_items/shipments/returns.
+
+    found_count: 1
+    findings:
+      - agent: validator-codex-1
+        timestamp: 2026-02-11T20:19:31Z
+        note: "Раунд 4: over-fetching в горячем endpoint."
+    fix: null

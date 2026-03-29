@@ -1,7 +1,7 @@
 meta:
   target: "dashboard (client/src/pages/dashboard.tsx + /api/dashboard/stats, /api/stock, /api/movements)"
   created: 2026-02-10
-  last_updated: 2026-02-10T14:51:51Z
+  last_updated: 2026-02-12T00:35:45+0400
 
 errors:
   - id: e-dash-001
@@ -37,7 +37,7 @@ errors:
       FROM inventory.movements
       ORDER BY created_at DESC
 
-    found_count: 1
+    found_count: 2
     rejected_count: 0
 
     findings:
@@ -45,6 +45,10 @@ errors:
         timestamp: 2026-02-10T14:41:33Z
         agrees: true
         note: "Раунд 2: главный экран тянет всю историю движений, хотя показывает только 5"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: true
+        note: "Раунд 4: перепроверено, на главной реально нужен только top-5 превью"
 
     fix: null
 
@@ -85,7 +89,7 @@ errors:
       FROM inventory.box_contents
       WHERE smart = ANY($1)
 
-    found_count: 1
+    found_count: 2
     rejected_count: 0
 
     findings:
@@ -93,6 +97,10 @@ errors:
         timestamp: 2026-02-10T14:41:33Z
         agrees: true
         note: "Раунд 2: для превью на главной не нужен полный /api/stock (и тем более boxes)"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: true
+        note: "Раунд 4: подтверждено по текущему коду, лишняя нагрузка остаётся"
 
     fix: null
 
@@ -127,13 +135,17 @@ errors:
       ORDER BY smart
 
     found_count: 1
-    rejected_count: 0
+    rejected_count: 1
 
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:41:33Z
         agrees: true
         note: "Раунд 2: текст 'Топ' не соответствует фактической сортировке"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: false
+        note: "Раунд 5: в текущем коде есть client-side sort по totalQty, ошибка больше не воспроизводится"
 
     fix: null
 
@@ -163,13 +175,17 @@ errors:
       {statsLoading ? <Skeleton .../> : <h3> {stats?.inStock || 0} </h3>}
 
     found_count: 1
-    rejected_count: 0
+    rejected_count: 1
 
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:41:33Z
         agrees: true
         note: "Раунд 2: ошибки API сейчас визуально неотличимы от 'нулевых' данных"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: false
+        note: "Раунд 5: в текущем dashboard есть явные error-state для stats/stock/movements"
 
     fix: null
 
@@ -198,13 +214,17 @@ errors:
       <div className=\"truncate font-mono text-xs font-medium text-foreground\">Подключено</div>
 
     found_count: 1
-    rejected_count: 0
+    rejected_count: 1
 
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:41:33Z
         agrees: true
         note: "Раунд 2: статус подключения рисуется всегда 'ok'"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: false
+        note: "Раунд 5: сейчас статус берётся из /api/health/db через react-query, не статичная заглушка"
 
     fix: null
 
@@ -241,7 +261,7 @@ errors:
       VALUES (..., -toInt(item["qty"]), 'sale', ...)
 
     found_count: 2
-    rejected_count: 0
+    rejected_count: 1
 
     findings:
       - agent: validator-1
@@ -255,6 +275,143 @@ errors:
           Раунд 5: перепроверка — sale movement действительно создаётся с `qty_delta = -qty` (qty может быть > 1).
           Если метрика должна отражать количество операций/позиций, достаточно переименовать.
           Если должна отражать проданные единицы — нужен `SUM(-qty_delta)`.
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: false
+        note: "Раунд 5: в текущем backend `salesToday` уже считается через SUM(ABS(qty_delta)), не COUNT(*)"
+
+    fix: null
+
+  - id: e-dash-007
+    file: client/src/pages/dashboard.tsx
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В блоках "Текущие остатки" и "Последние движения" при успешном ответе API
+      рендерится только `map()` по массиву.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если массив пустой (новая/пустая БД), карточка выглядит пустой без явного сообщения.
+      Пользователь не понимает: это "нет данных" или "сломалась загрузка".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для пустых массивов нужен явный empty-state:
+      "Нет остатков" / "Движений пока нет".
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      ((stockLevels as StockLevel[] || []).slice().sort(...).slice(0, 5)).map(...)
+      (movements as Movement[] || []).slice(0, 5).map(...)
+
+      # expected
+      if (!topStock.length) return <EmptyState text="Нет остатков" />
+      if (!recentMovements.length) return <EmptyState text="Движений пока нет" />
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: true
+        note: "Раунд 3: проверка пустых коллекций"
+
+    fix: null
+
+  - id: e-dash-008
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      GET /api/movements перехватывает ошибки общим `except Exception`.
+      При невалидном `boxNumber` из `storage.getMovements()` поднимается `InvalidRequestError`,
+      но роут отдаёт 500 вместо 400.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Клиентские ошибки валидации выглядят как "падение сервера".
+      Это ломает корректную обработку ошибок на клиенте и вводит в заблуждение.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      `InvalidRequestError` должен явно маппиться на HTTP 400.
+
+    code_example: |
+      # py_backend/routes.py
+      @app.get("/api/movements")
+      async def get_movements(...):
+        try:
+          ...
+        except Exception:
+          return JSONResponse(status_code=500, ...)
+
+      # expected
+      except InvalidRequestError as err:
+        return JSONResponse(status_code=400, content={"error": str(err)})
+
+    found_count: 2
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        agrees: true
+        note: "Раунд 2+5: перепроверено через цепочку routes.py -> storage.requireBoxName"
+      - agent: validator-codex-browser
+        timestamp: 2026-02-12T00:35:45+0400
+        agrees: true
+        note: |
+          Практическая проверка через agent-browser:
+          `GET /api/movements?boxNumber=bad%2Fbox` возвращает status 500 и body `{"error":"Failed to get movements"}`.
+          Ошибка валидации параметра boxNumber маскируется под серверную.
+
+    fix: null
+
+  - id: e-dash-009
+    file: client/src/components/sidebar.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Индикатор "Статус БД" рассчитывается как `dbHealth?.connected === true`.
+      При первичном успехе `dbHealth` становится `{ connected: true }`.
+      Если позже health-check падает (network error/abort), React Query сохраняет предыдущие data,
+      поэтому UI продолжает показывать "Подключено".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При временной недоступности backend/БД пользователь видит ложный "зелёный" статус
+      и считает, что система в порядке.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При `isError` по `/api/health/db` индикатор должен переходить в состояние "Нет соединения"
+      (или явно показывать "Ошибка проверки"), даже если ранее было успешное значение.
+
+    code_example: |
+      # client/src/components/sidebar.tsx
+      const { data: dbHealth, isLoading: dbLoading } = useQuery({ queryKey: ["/api/health/db"], ... });
+      const dbConnected = dbHealth?.connected === true;
+      ...
+      {dbLoading ? "Проверка..." : dbConnected ? "Подключено" : "Нет соединения"}
+
+      # practical reproduce (agent-browser):
+      network route "**/api/health/db" --abort
+      wait > 15s (refetchInterval)
+      # UI остаётся "Подключено"
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-codex-browser
+        timestamp: 2026-02-12T00:35:45+0400
+        agrees: true
+        note: |
+          Практическая проверка через agent-browser:
+          после `network route "**/api/health/db" --abort` и ожидания 17 секунд
+          fetch на `/api/health/db` падает (`TypeError: Failed to fetch`), но текст в сайдбаре остаётся "Подключено".
 
     fix: null
 
@@ -288,11 +445,16 @@ improvements:
         ...
       ];
 
-    found_count: 1
+    found_count: 2
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:48:39Z
         note: "Раунд 3: улучшение читаемости, без изменения бизнес-логики"
+      - agent: validator-codex-browser
+        timestamp: 2026-02-12T00:35:45+0400
+        note: |
+          Практическая проверка: на дашборде в "Последние движения" отображаются сырые коды
+          (`purchase`, `sale`, `adjust`, `transfer`), что выбивается из русскоязычного UI.
 
     fix: null
 
@@ -321,11 +483,20 @@ improvements:
       # client/src/App.tsx
       <Route path=\"/stock/:smart\" component={StockDetails} />
 
-    found_count: 1
+    found_count: 3
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:48:39Z
         note: "Раунд 3: UX-баг навигации на вложенных страницах"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        note: "Раунд 4: перепроверено на текущем роутинге (`/stock/:smart`, `/orders/:id`, `/customers/:id`)"
+      - agent: validator-codex-browser
+        timestamp: 2026-02-12T00:35:45+0400
+        note: |
+          Практически подтверждено через agent-browser:
+          на `/stock/smart_00001`, `/orders/15`, `/customers/6` активный пункт сайдбара отсутствует
+          (eval: active links = `[]`).
 
     fix: null
 
@@ -353,11 +524,14 @@ improvements:
       staleTime: Infinity,
       refetchOnWindowFocus: false,
 
-    found_count: 1
+    found_count: 2
     findings:
       - agent: validator-1
         timestamp: 2026-02-10T14:48:39Z
         note: "Раунд 3: не баг в коде, но риск устаревших 'сегодняшних' метрик"
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        note: "Раунд 3: для метрик 'Сегодня' риск устаревания сохраняется при долгой открытой вкладке"
 
     fix: null
 
@@ -395,5 +569,125 @@ improvements:
       - agent: validator-1
         timestamp: 2026-02-10T14:50:46Z
         note: "Раунд 4: DRY для reason/date formatting"
+
+    fix: null
+
+  - id: i-dash-005
+    file: client/src/pages/dashboard.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Скелетон-верстка списка (5 строк-заглушек) продублирована в двух блоках:
+      "Текущие остатки" и "Последние движения".
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Изменения loading-state нужно синхронно править в нескольких местах.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий компонент `DashboardListSkeleton`.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      {[...Array(5)].map((_, i) => (
+        <div key={i} className="flex items-center justify-between p-3 rounded border">...</div>
+      ))}
+
+    found_count: 1
+    findings:
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        note: "Раунд 4: DRY check"
+
+    fix: null
+
+  - id: i-dash-006
+    file: client/src/pages/dashboard.tsx
+    category: dead-code
+
+    issue: |
+      ЧТО НЕ ТАК:
+      В `getStockStatus` есть ветка `qty === 0`, но превью берется из `/api/stock`,
+      где нулевые остатки исключены на уровне `inventory.stock` view.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишняя ветка усложняет поддержку и запутывает реальный контракт данных.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Либо убрать ветку `qty === 0`, либо документировать другой источник,
+      который может реально вернуть 0 в этот компонент.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      if (qty === 0) return { label: "Нет в наличии", ... };
+      if (qty <= 10) return { label: "Мало", ... };
+
+    found_count: 1
+    findings:
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        note: "Раунд 4: dead-code check"
+
+    fix: null
+
+  - id: i-dash-007
+    file: client/src/pages/dashboard.tsx
+    category: kiss-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      4 статистические карточки на главной реализованы дублирующимся JSX-шаблоном
+      с одинаковым каркасом (иконка, badge, loading/error/value).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Любое изменение логики/верстки нужно копировать в 4 участка.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести `StatCard` и рендерить через конфиг-массив.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      <Card>...stats?.inStock...</Card>
+      <Card>...stats?.totalParts...</Card>
+      <Card>...stats?.movementsToday...</Card>
+      <Card>...stats?.salesToday...</Card>
+
+    found_count: 1
+    findings:
+      - agent: validator-codex
+        timestamp: 2026-02-12T00:23:36+0400
+        note: "Раунд 4: KISS check"
+
+    fix: null
+
+  - id: i-dash-008
+    file: client/src/pages/dashboard.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Дашборд форматирует дату движения через `toLocaleString()` без явной локали,
+      а страница истории движений использует фиксированный `ru-RU` формат.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      В зависимости от окружения пользователь видит разные форматы дат в разных разделах
+      (например, на дашборде `2/10/2026, 2:28:42 PM`, в истории `10.02.2026, 14:28`),
+      что создаёт путаницу и неоднозначность день/месяц.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Использовать общий форматтер даты/времени с фиксированной локалью для всего UI.
+
+    code_example: |
+      # client/src/pages/dashboard.tsx
+      {new Date(movement.createdAt).toLocaleString()}
+
+      # client/src/pages/movement-history.tsx
+      new Date(dateString).toLocaleString('ru-RU', { ... })
+
+    found_count: 1
+    findings:
+      - agent: validator-codex-browser
+        timestamp: 2026-02-12T00:35:45+0400
+        note: "Практически подтверждено в браузере: формат даты на дашборде и в истории различается."
 
     fix: null

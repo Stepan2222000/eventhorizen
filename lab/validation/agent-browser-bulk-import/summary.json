@@ -1,0 +1,44 @@
+[
+  {
+    "file": "valid-lf.csv",
+    "totalRows": 10,
+    "imported": 1,
+    "errors": 1,
+    "firstError": null
+  },
+  {
+    "file": "valid-crlf.csv",
+    "totalRows": 0,
+    "imported": 0,
+    "errors": null,
+    "firstError": null
+  },
+  {
+    "file": "valid-bom.csv",
+    "totalRows": 1,
+    "imported": 12,
+    "errors": 2,
+    "firstError": "Строка 2: SMART код обязательно"
+  },
+  {
+    "file": "mixed-case-headers.csv",
+    "totalRows": 1,
+    "imported": 12,
+    "errors": 2,
+    "firstError": "Строка 2: SMART код обязательно"
+  },
+  {
+    "file": "adjust-no-note.csv",
+    "totalRows": 1,
+    "imported": 12,
+    "errors": 2,
+    "firstError": "Строка 2: Примечание обязательно"
+  },
+  {
+    "file": "cp1251.csv",
+    "totalRows": null,
+    "imported": null,
+    "errors": null,
+    "firstError": null
+  }
+]

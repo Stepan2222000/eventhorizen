@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import math
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Protocol, Sequence, cast
+from zoneinfo import ZoneInfo
 
 from py_backend.normalization import normalize_box_name
 from py_backend.types import (
@@ -57,6 +58,9 @@ class InventoryPoolProtocol(DbConnectionProtocol, Protocol):
         ...
 
 
+BUSINESS_TZ = ZoneInfo("Europe/Moscow")
+
+
 def isSerializationError(err: Exception) -> bool:
     code = getattr(err, "code", None)
     sqlstate = getattr(err, "sqlstate", None)
@@ -82,10 +86,8 @@ def toInt(value: Any) -> int:
 def toDateIso(value: Any) -> str:
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            # Match Node.js Date behavior for timestamp-without-timezone values from pg:
-            # treat naive datetime as local time, then convert to UTC ISO string.
-            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
-            dt = value.replace(tzinfo=local_tz)
+            # Business timezone is fixed to Moscow for consistent "today" semantics.
+            dt = value.replace(tzinfo=BUSINESS_TZ)
         else:
             dt = value
         return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -95,6 +97,9 @@ def toDateIso(value: Any) -> str:
 
 
 def toFloat(value: Any) -> float:
+    if isinstance(value, Decimal):
+        as_float = float(value)
+        return as_float if math.isfinite(as_float) else 0.0
     if isinstance(value, bool):
         return 0.0
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
@@ -111,6 +116,60 @@ def toFloat(value: Any) -> float:
 
 def toNumberString(value: Any) -> str:
     return f"{toFloat(value):.2f}"
+
+
+def _toFiniteNumber(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        n = float(value)
+        return n if math.isfinite(n) else None
+    if isinstance(value, (int, float)):
+        n = float(value)
+        return n if math.isfinite(n) else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            n = float(text)
+        except ValueError:
+            return None
+        return n if math.isfinite(n) else None
+    return None
+
+
+def requireInteger(value: Any, field: str) -> int:
+    n = _toFiniteNumber(value)
+    if n is None:
+        raise InvalidRequestError(f"{field} должно быть числом")
+    if not n.is_integer():
+        raise InvalidRequestError(f"{field} должно быть целым числом")
+    return int(n)
+
+
+def requirePositiveInteger(value: Any, field: str) -> int:
+    result = requireInteger(value, field)
+    if result <= 0:
+        raise InvalidRequestError(f"{field} должно быть положительным")
+    return result
+
+
+def requireStrictBool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+        if float(value) == 1:
+            return True
+        if float(value) == 0:
+            return False
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"true", "1", "yes", "y"}:
+            return True
+        if text in {"false", "0", "no", "n"}:
+            return False
+    raise InvalidRequestError(f"{field} должно быть boolean")
 
 
 def toDbNumericString(value: Any) -> str | None:
@@ -321,12 +380,23 @@ class DatabaseStorage:
 
     async def requireActiveBoxNameTx(self, client: DbConnectionProtocol, box_name_input: str, field: str) -> str:
         name = requireBoxName(box_name_input, field)
-        box = await self.getBoxByNameTx(client, name)
-        if box is None:
+        norm = normalize_box_name(name)
+        if not norm:
             raise InvalidRequestError(f"Коробка не найдена: {name}")
-        if not bool(box.get("isActive")):
-            raise InvalidRequestError(f"Коробка закрыта: {box.get('name')}")
-        return cast(str, box.get("name"))
+        row = await client.fetchrow(
+            """
+            SELECT name, is_active
+            FROM inventory.boxes
+            WHERE name_norm = $1
+            FOR SHARE
+            """,
+            norm,
+        )
+        if row is None:
+            raise InvalidRequestError(f"Коробка не найдена: {name}")
+        if not bool(_obj_get(row, "is_active")):
+            raise InvalidRequestError(f"Коробка закрыта: {_obj_get(row, 'name')}")
+        return cast(str, _obj_get(row, "name"))
 
     def mapMovementRow(self, row: Mapping[str, Any]) -> dict[str, Any]:
         sale_status = _obj_get(row, "sale_status")
@@ -366,16 +436,12 @@ class DatabaseStorage:
     def validateAndSanitizeForInsert(self, input_data: InsertMovement | Mapping[str, Any]) -> dict[str, Any]:
         data = _as_dict(input_data)
         reason = cast(ReasonCode, data.get("reason"))
+        if reason not in REASON_CODES:
+            raise InvalidRequestError("Неверная причина операции")
         smart = requireNonEmpty(data.get("smart"), "SMART код")
-        qty_delta_raw = data.get("qtyDelta")
-
-        is_number = isinstance(qty_delta_raw, (int, float)) and not isinstance(qty_delta_raw, bool)
-        if not is_number or not math.isfinite(float(qty_delta_raw)) or float(qty_delta_raw) == 0:
+        qty_delta = requireInteger(data.get("qtyDelta"), "Количество")
+        if qty_delta == 0:
             raise InvalidRequestError("Количество не может быть равно 0")
-        if not float(qty_delta_raw).is_integer():
-            raise InvalidRequestError("Количество должно быть целым числом")
-
-        qty_delta = int(float(qty_delta_raw))
 
         note = data.get("note")
         purchase_price = data.get("purchasePrice")
@@ -394,7 +460,7 @@ class DatabaseStorage:
         if reason == "purchase":
             if qty_delta <= 0:
                 raise InvalidRequestError("Для покупки количество должно быть положительным")
-            requireNumberString(purchase_price, "Цена закупки")
+            requireNonNegativeNumberString(purchase_price, "Цена закупки")
             box = requireBoxName(box_number, "Номер коробки")
             return {
                 "smart": smart,
@@ -413,11 +479,9 @@ class DatabaseStorage:
         if reason == "sale":
             if qty_delta >= 0:
                 raise InvalidRequestError("Для продажи количество должно быть отрицательным")
-            requireNumberString(sale_price, "Цена продажи")
-            requireNumberString(delivery_price, "Стоимость доставки")
-            is_shipping_number = isinstance(shipping_method_id, (int, float)) and not isinstance(shipping_method_id, bool)
-            if shipping_method_id is None or not is_shipping_number or not math.isfinite(float(shipping_method_id)):
-                raise InvalidRequestError("Способ доставки обязателен")
+            requireNonNegativeNumberString(sale_price, "Цена продажи")
+            requireNonNegativeNumberString(delivery_price, "Стоимость доставки")
+            shipping_method_id_value = requirePositiveInteger(shipping_method_id, "Способ доставки")
             box = requireBoxName(box_number, "Номер коробки")
             return {
                 "smart": smart,
@@ -429,28 +493,12 @@ class DatabaseStorage:
                 "deliveryPrice": delivery_price,
                 "boxNumber": box,
                 "trackNumber": track_number,
-                "shippingMethodId": shipping_method_id,
+                "shippingMethodId": shipping_method_id_value,
                 "saleStatus": "awaiting_shipment",
             }
 
         if reason == "return":
-            if qty_delta <= 0:
-                raise InvalidRequestError("Для возврата количество должно быть положительным")
-            requireNonEmpty(note, "Примечание")
-            box = requireBoxName(box_number, "Номер коробки")
-            return {
-                "smart": smart,
-                "qtyDelta": qty_delta,
-                "reason": reason,
-                "note": note,
-                "purchasePrice": None,
-                "salePrice": None,
-                "deliveryPrice": None,
-                "boxNumber": box,
-                "trackNumber": None,
-                "shippingMethodId": None,
-                "saleStatus": None,
-            }
+            raise InvalidRequestError("Возвраты создаются через заказы или возврат продажи")
 
         if reason == "writeoff":
             if qty_delta >= 0:
@@ -472,7 +520,7 @@ class DatabaseStorage:
 
         requireNonEmpty(note, "Примечание")
         if purchase_price is not None and str(purchase_price).strip():
-            requireNumberString(purchase_price, "Цена за единицу")
+            requireNonNegativeNumberString(purchase_price, "Цена за единицу")
         box = requireBoxName(box_number, "Номер коробки")
 
         return {
@@ -509,6 +557,173 @@ class DatabaseStorage:
             f"{last_error or 'unknown error'}"
         )
 
+    async def _executeMovementInsertTx(self, client: Any, movement: dict[str, Any]) -> dict[str, Any]:
+        """Execute a single movement insert within an existing transaction. Returns enriched movement."""
+        movement["boxNumber"] = await self.requireActiveBoxNameTx(
+            client,
+            cast(str, movement.get("boxNumber") or ""),
+            "Номер коробки",
+        )
+
+        if movement["reason"] == "sale":
+            shipping_method = await client.fetchrow(
+                "SELECT id FROM inventory.shipping_methods WHERE id = $1",
+                movement["shippingMethodId"],
+            )
+            if shipping_method is None:
+                raise InvalidRequestError("Способ доставки не найден")
+
+        is_decrease = movement["reason"] in ("sale", "writeoff")
+        qty_delta = int(movement["qtyDelta"])
+        is_negative_adjust = movement["reason"] == "adjust" and qty_delta < 0
+
+        if is_decrease or is_negative_adjust:
+            current_stock = await self.getCurrentStockTx(client, cast(str, movement["smart"]))
+            requested_qty = abs(qty_delta)
+            if current_stock < requested_qty:
+                raise InsufficientStockError(cast(str, movement["smart"]), current_stock, requested_qty)
+            current_box_stock = await self.getCurrentBoxStockTx(
+                client,
+                cast(str, movement["smart"]),
+                cast(str, movement["boxNumber"]),
+            )
+            if current_box_stock < requested_qty:
+                raise InsufficientBoxStockError(
+                    cast(str, movement["smart"]),
+                    cast(str, movement["boxNumber"]),
+                    current_box_stock,
+                    requested_qty,
+                )
+
+        insert_row = await client.fetchrow(
+            """
+            INSERT INTO inventory.movements (
+              smart, qty_delta, reason, note,
+              purchase_price, sale_price, delivery_price,
+              box_number, track_number, shipping_method_id, sale_status,
+              created_at
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            RETURNING *
+            """,
+            movement["smart"],
+            movement["qtyDelta"],
+            movement["reason"],
+            movement["note"],
+            movement["purchasePrice"],
+            movement["salePrice"],
+            movement["deliveryPrice"],
+            movement["boxNumber"],
+            movement["trackNumber"],
+            movement["shippingMethodId"],
+            movement["saleStatus"],
+        )
+        if insert_row is None:
+            raise Exception("Movement not found after insert")
+
+        movement_id = toInt(_obj_get(insert_row, "id"))
+        smart = cast(str, movement.get("smart") or "")
+        reason = cast(str, movement.get("reason") or "")
+        qty_delta = int(movement["qtyDelta"])
+        box = cast(str, movement.get("boxNumber") or "")
+        qty = abs(qty_delta)
+
+        is_increase = reason in ("purchase", "return") or (reason == "adjust" and qty_delta > 0)
+        is_decrease = reason in ("sale", "writeoff") or (reason == "adjust" and qty_delta < 0)
+
+        if qty <= 0:
+            raise InvalidRequestError("Количество должно быть больше 0")
+
+        if is_increase:
+            await client.execute(
+                """
+                WITH inserted AS (
+                  INSERT INTO inventory.items (
+                    smart, state, box_number, note,
+                    purchase_movement_id, sold_movement_id, written_off_movement_id, last_movement_id,
+                    created_at, updated_at
+                  )
+                  SELECT
+                    $1, 'in_stock', $2, NULL,
+                    $3, NULL, NULL, $3,
+                    NOW(), NOW()
+                  FROM generate_series(1, $4::int)
+                  RETURNING id
+                )
+                INSERT INTO inventory.movement_items (movement_id, item_id)
+                SELECT $3, id
+                FROM inserted
+                """,
+                smart,
+                box,
+                movement_id,
+                qty,
+            )
+
+        elif is_decrease:
+            picked_rows = await client.fetch(
+                """
+                SELECT id
+                FROM inventory.items
+                WHERE smart = $1
+                  AND box_number = $2
+                  AND state = 'in_stock'
+                ORDER BY id ASC
+                LIMIT $3
+                FOR UPDATE
+                """,
+                smart,
+                box,
+                qty,
+            )
+            picked_ids = [toInt(_obj_get(r, "id")) for r in picked_rows]
+            if len(picked_ids) < qty:
+                available = await self.getCurrentBoxStockTx(client, smart, box)
+                raise InsufficientBoxStockError(smart, box, available, qty)
+
+            next_state: str
+            sold_movement_id: int | None = None
+            written_off_movement_id: int | None = None
+            if reason == "sale":
+                next_state = "sold"
+                sold_movement_id = movement_id
+            else:
+                next_state = "written_off"
+                written_off_movement_id = movement_id
+
+            await client.execute(
+                """
+                UPDATE inventory.items
+                SET state = $2,
+                    box_number = NULL,
+                    sold_movement_id = COALESCE($3, sold_movement_id),
+                    written_off_movement_id = COALESCE($4, written_off_movement_id),
+                    last_movement_id = $5,
+                    updated_at = NOW()
+                WHERE id = ANY($1::bigint[])
+                """,
+                picked_ids,
+                next_state,
+                sold_movement_id,
+                written_off_movement_id,
+                movement_id,
+            )
+
+            await client.execute(
+                """
+                INSERT INTO inventory.movement_items (movement_id, item_id)
+                SELECT $1, UNNEST($2::bigint[])
+                """,
+                movement_id,
+                picked_ids,
+            )
+
+        else:
+            raise InvalidRequestError(f"Unsupported reason for item-based movement: {reason}")
+
+        mapped = self.mapMovementRow(insert_row)
+        return self.enrichMovement(mapped)
+
     async def createMovementAttempt(self, input_data: InsertMovement | Mapping[str, Any]) -> dict[str, Any]:
         movement = self.validateAndSanitizeForInsert(input_data)
 
@@ -516,184 +731,51 @@ class DatabaseStorage:
         try:
             await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             try:
-                if (
-                    movement["reason"] == "return"
-                    and movement["note"]
-                    and isinstance(movement["note"], str)
-                    and "Возврат продажи #" in movement["note"]
-                ):
-                    dup = await client.fetch(
-                        "SELECT id FROM inventory.movements WHERE reason = 'return' AND note = $1 LIMIT 1",
-                        movement["note"],
-                    )
-                    if len(dup) > 0:
-                        raise Exception("Товар уже возвращен на склад")
-
-                # Validate box exists and is active (canonicalize to registry name).
-                movement["boxNumber"] = await self.requireActiveBoxNameTx(
-                    client,
-                    cast(str, movement.get("boxNumber") or ""),
-                    "Номер коробки",
-                )
-
-                is_decrease = movement["reason"] in ("sale", "writeoff")
-                is_negative_adjust = movement["reason"] == "adjust" and toInt(movement["qtyDelta"]) < 0
-
-                if is_decrease or is_negative_adjust:
-                    current_stock = await self.getCurrentStockTx(client, cast(str, movement["smart"]))
-                    requested_qty = abs(toInt(movement["qtyDelta"]))
-                    if current_stock < requested_qty:
-                        raise InsufficientStockError(cast(str, movement["smart"]), current_stock, requested_qty)
-                    current_box_stock = await self.getCurrentBoxStockTx(
-                        client,
-                        cast(str, movement["smart"]),
-                        cast(str, movement["boxNumber"]),
-                    )
-                    if current_box_stock < requested_qty:
-                        raise InsufficientBoxStockError(
-                            cast(str, movement["smart"]),
-                            cast(str, movement["boxNumber"]),
-                            current_box_stock,
-                            requested_qty,
-                        )
-
-                insert_row = await client.fetchrow(
-                    """
-                    INSERT INTO inventory.movements (
-                      smart, qty_delta, reason, note,
-                      purchase_price, sale_price, delivery_price,
-                      box_number, track_number, shipping_method_id, sale_status,
-                      created_at
-                    )
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
-                    RETURNING *
-                    """,
-                    movement["smart"],
-                    movement["qtyDelta"],
-                    movement["reason"],
-                    movement["note"],
-                    movement["purchasePrice"],
-                    movement["salePrice"],
-                    movement["deliveryPrice"],
-                    movement["boxNumber"],
-                    movement["trackNumber"],
-                    movement["shippingMethodId"],
-                    movement["saleStatus"],
-                )
-                if insert_row is None:
-                    raise Exception("Movement not found after insert")
-
-                movement_id = toInt(_obj_get(insert_row, "id"))
-                smart = cast(str, movement.get("smart") or "")
-                reason = cast(str, movement.get("reason") or "")
-                qty_delta = toInt(movement.get("qtyDelta"))
-                box = cast(str, movement.get("boxNumber") or "")
-                qty = abs(qty_delta)
-
-                is_increase = reason in ("purchase", "return") or (reason == "adjust" and qty_delta > 0)
-                is_decrease = reason in ("sale", "writeoff") or (reason == "adjust" and qty_delta < 0)
-
-                if qty <= 0:
-                    raise InvalidRequestError("Количество должно быть больше 0")
-
-                if is_increase:
-                    # Create concrete instances and link them to the movement.
-                    await client.execute(
-                        """
-                        WITH inserted AS (
-                          INSERT INTO inventory.items (
-                            smart, state, box_number, note,
-                            purchase_movement_id, sold_movement_id, written_off_movement_id, last_movement_id,
-                            created_at, updated_at
-                          )
-                          SELECT
-                            $1, 'in_stock', $2, NULL,
-                            $3, NULL, NULL, $3,
-                            NOW(), NOW()
-                          FROM generate_series(1, $4::int)
-                          RETURNING id
-                        )
-                        INSERT INTO inventory.movement_items (movement_id, item_id)
-                        SELECT $3, id
-                        FROM inserted
-                        """,
-                        smart,
-                        box,
-                        movement_id,
-                        qty,
-                    )
-
-                elif is_decrease:
-                    # Pick concrete instances from the specified box and move them out of stock.
-                    picked_rows = await client.fetch(
-                        """
-                        SELECT id
-                        FROM inventory.items
-                        WHERE smart = $1
-                          AND box_number = $2
-                          AND state = 'in_stock'
-                        ORDER BY id ASC
-                        LIMIT $3
-                        FOR UPDATE
-                        """,
-                        smart,
-                        box,
-                        qty,
-                    )
-                    picked_ids = [toInt(_obj_get(r, "id")) for r in picked_rows]
-                    if len(picked_ids) < qty:
-                        available = await self.getCurrentBoxStockTx(client, smart, box)
-                        raise InsufficientBoxStockError(smart, box, available, qty)
-
-                    next_state: str
-                    sold_movement_id: int | None = None
-                    written_off_movement_id: int | None = None
-                    if reason == "sale":
-                        next_state = "sold"
-                        sold_movement_id = movement_id
-                    else:
-                        next_state = "written_off"
-                        written_off_movement_id = movement_id
-
-                    await client.execute(
-                        """
-                        UPDATE inventory.items
-                        SET state = $2,
-                            box_number = NULL,
-                            sold_movement_id = COALESCE($3, sold_movement_id),
-                            written_off_movement_id = COALESCE($4, written_off_movement_id),
-                            last_movement_id = $5,
-                            updated_at = NOW()
-                        WHERE id = ANY($1::bigint[])
-                        """,
-                        picked_ids,
-                        next_state,
-                        sold_movement_id,
-                        written_off_movement_id,
-                        movement_id,
-                    )
-
-                    await client.execute(
-                        """
-                        INSERT INTO inventory.movement_items (movement_id, item_id)
-                        SELECT $1, UNNEST($2::bigint[])
-                        """,
-                        movement_id,
-                        picked_ids,
-                    )
-
-                else:
-                    # transfer is a separate endpoint; everything else should have been covered above.
-                    raise InvalidRequestError(f"Unsupported reason for item-based movement: {reason}")
-
+                result = await self._executeMovementInsertTx(client, movement)
                 await client.execute("COMMIT")
-                mapped = self.mapMovementRow(insert_row)
-                return self.enrichMovement(mapped)
+                return result
             except Exception:
                 await client.execute("ROLLBACK")
                 raise
         finally:
             await self.inventoryPool.release(client)
+
+    async def createMovementsBatch(self, items: list[InsertMovement | Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Create multiple movements atomically in a single transaction."""
+        if not items:
+            return []
+        movements = [self.validateAndSanitizeForInsert(item) for item in items]
+
+        max_retries = 3
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
+            client = await self.inventoryPool.acquire()
+            try:
+                await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                try:
+                    results: list[dict[str, Any]] = []
+                    for movement in movements:
+                        result = await self._executeMovementInsertTx(client, movement)
+                        results.append(result)
+                    await client.execute("COMMIT")
+                    return results
+                except Exception:
+                    await client.execute("ROLLBACK")
+                    raise
+            except Exception as err:
+                last_error = err
+                if isSerializationError(err) and attempt < max_retries - 1:
+                    delay_ms = min(100 * (2**attempt), 1000)
+                    await asyncio.sleep(delay_ms / 1000)
+                    continue
+                raise
+            finally:
+                await self.inventoryPool.release(client)
+
+        raise Exception(
+            f"Failed to create movements batch after {max_retries} attempts due to concurrent access: "
+            f"{last_error or 'unknown error'}"
+        )
 
     async def getMovements(self, options: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
         options_data = _as_dict(options) if options is not None else {}
@@ -717,7 +799,7 @@ class DatabaseStorage:
                 """
                 SELECT *
                 FROM inventory.movements
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 """
             )
         else:
@@ -726,7 +808,7 @@ class DatabaseStorage:
                 SELECT *
                 FROM inventory.movements
                 WHERE box_number = $1
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 """,
                 box_filter,
             )
@@ -773,14 +855,14 @@ class DatabaseStorage:
 
     async def getPurchasesBySmart(self, smart: str) -> list[dict[str, Any]]:
         rows = await self.inventoryPool.fetch(
-            "SELECT * FROM inventory.movements WHERE smart = $1 AND reason = 'purchase' ORDER BY created_at DESC",
+            "SELECT * FROM inventory.movements WHERE smart = $1 AND reason = 'purchase' ORDER BY created_at DESC, id DESC",
             smart,
         )
         return [self.enrichMovement(self.mapMovementRow(row)) for row in rows]
 
     async def getSalesBySmart(self, smart: str) -> list[dict[str, Any]]:
         rows = await self.inventoryPool.fetch(
-            "SELECT * FROM inventory.movements WHERE smart = $1 AND reason = 'sale' ORDER BY created_at DESC",
+            "SELECT * FROM inventory.movements WHERE smart = $1 AND reason = 'sale' ORDER BY created_at DESC, id DESC",
             smart,
         )
         return [self.enrichMovement(self.mapMovementRow(row)) for row in rows]
@@ -799,7 +881,7 @@ class DatabaseStorage:
         has_note = "note" in updates_dict
 
         if not has_purchase_price and not has_note:
-            raise Exception("No fields to update")
+            raise InvalidRequestError("Нет полей для обновления")
 
         client = await self.inventoryPool.acquire()
         try:
@@ -823,7 +905,7 @@ class DatabaseStorage:
                     purchase_price = updates_dict.get("purchasePrice")
                     if purchase_price is None:
                         raise InvalidRequestError("Цена закупки обязательна")
-                    price = requireNumberString(purchase_price, "Цена закупки")
+                    price = requireNonNegativeNumberString(purchase_price, "Цена закупки")
                     set_clauses.append(f"purchase_price = ${param}")
                     values.append(price)
                     param += 1
@@ -834,7 +916,7 @@ class DatabaseStorage:
                     param += 1
 
                 if len(set_clauses) == 0:
-                    raise Exception("No fields to update")
+                    raise InvalidRequestError("Нет полей для обновления")
 
                 values.append(movement_id)
                 updated = await client.fetchrow(
@@ -1055,7 +1137,7 @@ class DatabaseStorage:
             SELECT *
             FROM inventory.movements
             WHERE box_number = $1
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $2
             """,
             canonical_name,
@@ -1084,17 +1166,11 @@ class DatabaseStorage:
         if not norm:
             raise InvalidRequestError("Название коробки некорректно")
 
-        existing = await self.inventoryPool.fetchrow(
-            "SELECT name FROM inventory.boxes WHERE name_norm = $1 LIMIT 1",
-            norm,
-        )
-        if existing is not None:
-            raise InvalidRequestError(f"Коробка уже существует: {_obj_get(existing, 'name')}")
-
         row = await self.inventoryPool.fetchrow(
             """
             INSERT INTO inventory.boxes (name, name_norm, description, is_active, created_at)
             VALUES ($1, $2, $3, TRUE, NOW())
+            ON CONFLICT (name_norm) DO NOTHING
             RETURNING name, description, is_active, created_at
             """,
             name,
@@ -1102,6 +1178,12 @@ class DatabaseStorage:
             description,
         )
         if row is None:
+            existing = await self.inventoryPool.fetchrow(
+                "SELECT name FROM inventory.boxes WHERE name_norm = $1 LIMIT 1",
+                norm,
+            )
+            if existing is not None:
+                raise InvalidRequestError(f"Коробка уже существует: {_obj_get(existing, 'name')}")
             raise Exception("Box not created")
         return self.mapBoxRow(row)
 
@@ -1111,56 +1193,78 @@ class DatabaseStorage:
         norm = normalize_box_name(box_name)
         if not norm:
             raise InvalidRequestError("Коробка не найдена")
+        client = await self.inventoryPool.acquire()
+        try:
+            await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            try:
+                existing = await client.fetchrow(
+                    """
+                    SELECT name, description, is_active, created_at
+                    FROM inventory.boxes
+                    WHERE name_norm = $1
+                    FOR UPDATE
+                    """,
+                    norm,
+                )
+                if existing is None:
+                    raise InvalidRequestError("Коробка не найдена")
 
-        existing = await self.inventoryPool.fetchrow(
-            "SELECT name, description, is_active, created_at FROM inventory.boxes WHERE name_norm = $1",
-            norm,
-        )
-        if existing is None:
-            raise InvalidRequestError("Коробка не найдена")
+                canonical = cast(str, _obj_get(existing, "name"))
 
-        canonical = cast(str, _obj_get(existing, "name"))
+                set_clauses: list[str] = []
+                values: list[Any] = []
+                idx = 1
 
-        if "isActive" in data and data.get("isActive") is False:
-            not_empty = await self.inventoryPool.fetchrow(
-                "SELECT 1 FROM inventory.box_contents WHERE box_number = $1 LIMIT 1",
-                canonical,
-            )
-            if not_empty is not None:
-                raise InvalidRequestError(f"Нельзя закрыть коробку {canonical}: в ней есть товар")
+                if "description" in data:
+                    raw = data.get("description")
+                    desc = raw.strip() if isinstance(raw, str) and raw.strip() else None
+                    set_clauses.append(f"description = ${idx}")
+                    values.append(desc)
+                    idx += 1
 
-        set_clauses: list[str] = []
-        values: list[Any] = []
-        idx = 1
+                if "isActive" in data:
+                    target_is_active = requireStrictBool(data.get("isActive"), "isActive")
+                    if target_is_active is False:
+                        not_empty = await client.fetchrow(
+                            """
+                            SELECT id
+                            FROM inventory.items
+                            WHERE box_number = $1
+                              AND state = 'in_stock'
+                            LIMIT 1
+                            FOR UPDATE
+                            """,
+                            canonical,
+                        )
+                        if not_empty is not None:
+                            raise InvalidRequestError(f"Нельзя закрыть коробку {canonical}: в ней есть товар")
+                    set_clauses.append(f"is_active = ${idx}")
+                    values.append(target_is_active)
+                    idx += 1
 
-        if "description" in data:
-            raw = data.get("description")
-            desc = raw.strip() if isinstance(raw, str) and raw.strip() else None
-            set_clauses.append(f"description = ${idx}")
-            values.append(desc)
-            idx += 1
+                if len(set_clauses) == 0:
+                    await client.execute("COMMIT")
+                    return self.mapBoxRow(existing)
 
-        if "isActive" in data:
-            set_clauses.append(f"is_active = ${idx}")
-            values.append(bool(data.get("isActive")))
-            idx += 1
-
-        if len(set_clauses) == 0:
-            return self.mapBoxRow(existing)
-
-        values.append(norm)
-        updated = await self.inventoryPool.fetchrow(
-            f"""
-            UPDATE inventory.boxes
-            SET {", ".join(set_clauses)}
-            WHERE name_norm = ${idx}
-            RETURNING name, description, is_active, created_at
-            """,
-            *values,
-        )
-        if updated is None:
-            raise Exception("Box not found")
-        return self.mapBoxRow(updated)
+                values.append(norm)
+                updated = await client.fetchrow(
+                    f"""
+                    UPDATE inventory.boxes
+                    SET {", ".join(set_clauses)}
+                    WHERE name_norm = ${idx}
+                    RETURNING name, description, is_active, created_at
+                    """,
+                    *values,
+                )
+                if updated is None:
+                    raise Exception("Box not found")
+                await client.execute("COMMIT")
+                return self.mapBoxRow(updated)
+            except Exception:
+                await client.execute("ROLLBACK")
+                raise
+        finally:
+            await self.inventoryPool.release(client)
 
     async def transferBetweenBoxes(self, input_data: Mapping[str, Any] | Any) -> dict[str, Any]:
         max_retries = 3
@@ -1184,9 +1288,7 @@ class DatabaseStorage:
     async def transferBetweenBoxesAttempt(self, input_data: Mapping[str, Any] | Any) -> dict[str, Any]:
         data = _as_dict(input_data)
         smart = requireNonEmpty(data.get("smart"), "SMART код")
-        qty = toInt(data.get("qty"))
-        if qty <= 0:
-            raise InvalidRequestError("Количество должно быть положительным")
+        qty = requirePositiveInteger(data.get("qty"), "Количество")
         if not self.smartCache.getBySmart(smart):
             raise InvalidRequestError(f"SMART код не найден в справочнике: {smart}")
 
@@ -1376,7 +1478,7 @@ class DatabaseStorage:
             """
             SELECT smart, total_qty
             FROM inventory.stock
-            ORDER BY smart
+            ORDER BY total_qty DESC, smart ASC
             """
         )
 
@@ -1489,6 +1591,9 @@ class DatabaseStorage:
         state: str | None = state_raw.strip() if isinstance(state_raw, str) and state_raw.strip() else None
         q: str | None = q_raw.strip() if isinstance(q_raw, str) and q_raw.strip() else None
 
+        limit = max(1, min(200, toInt(options_data.get("limit") or 50)))
+        offset = max(0, toInt(options_data.get("offset") or 0))
+
         box_filter: str | None = None
         if isinstance(box_filter_raw, str) and box_filter_raw.strip():
             requested = requireBoxName(box_filter_raw, "Коробка")
@@ -1498,11 +1603,8 @@ class DatabaseStorage:
                 norm,
             )
             if resolved is None:
-                return {"items": [], "total": 0, "limit": 0, "offset": 0}
+                return {"items": [], "total": 0, "limit": limit, "offset": offset}
             box_filter = cast(str, _obj_get(resolved, "name"))
-
-        limit = max(1, min(200, toInt(options_data.get("limit") or 50)))
-        offset = max(0, toInt(options_data.get("offset") or 0))
 
         where: list[str] = []
         args: list[Any] = []
@@ -1786,7 +1888,10 @@ class DatabaseStorage:
             WITH sales_summary AS (
               SELECT
                 smart,
-                AVG(CAST(sale_price AS NUMERIC)) as avg_sale_price,
+                (
+                  SUM(CAST(COALESCE(sale_price, 0) AS NUMERIC) * ABS(qty_delta))
+                  / NULLIF(SUM(ABS(qty_delta)), 0)
+                ) as avg_sale_price,
                 MAX(created_at) as last_sale_date,
                 SUM(ABS(qty_delta))::text as total_sales
               FROM inventory.movements
@@ -1830,6 +1935,7 @@ class DatabaseStorage:
             avg_purchase_rows,
             stock_rows,
             legacy_sales_rows,
+            legacy_return_rows,
             order_items_rows,
             shipment_cost_rows,
             return_cost_rows,
@@ -1854,9 +1960,25 @@ class DatabaseStorage:
             ),
             self.inventoryPool.fetch(
                 """
-                SELECT smart, qty_delta, sale_price, delivery_price
+                SELECT smart, qty_delta, sale_price::text as sale_price, delivery_price::text as delivery_price
                 FROM inventory.movements
                 WHERE reason = 'sale' AND order_id IS NULL
+                """
+            ),
+            self.inventoryPool.fetch(
+                """
+                SELECT
+                  r.smart,
+                  r.qty_delta,
+                  s.qty_delta AS sale_qty_delta,
+                  s.sale_price::text as sale_price,
+                  s.delivery_price::text as delivery_price
+                FROM inventory.movements r
+                JOIN inventory.movements s ON s.id = r.linked_movement_id
+                WHERE r.reason = 'return'
+                  AND r.order_id IS NULL
+                  AND s.reason = 'sale'
+                  AND s.order_id IS NULL
                 """
             ),
             self.inventoryPool.fetch(
@@ -1938,6 +2060,22 @@ class DatabaseStorage:
             acc["cost"] += avg_purchase * qty
             acc["deliveryCost"] += delivery_price
             acc["totalSalesQty"] += qty
+
+        for ret in legacy_return_rows:
+            smart = cast(str, _obj_get(ret, "smart"))
+            qty = abs(toInt(_obj_get(ret, "qty_delta")))
+            if qty <= 0:
+                continue
+            sale_price = toFloat(_obj_get(ret, "sale_price"))
+            delivery_price = toFloat(_obj_get(ret, "delivery_price"))
+            sale_qty = abs(toInt(_obj_get(ret, "sale_qty_delta")))
+            avg_purchase = avg_purchase_by_smart.get(smart, 0.0)
+            acc = ensure_acc(smart)
+            acc["revenue"] -= sale_price * qty
+            acc["cost"] -= avg_purchase * qty
+            if sale_qty > 0 and delivery_price > 0:
+                acc["deliveryCost"] -= delivery_price * (qty / sale_qty)
+            acc["totalSalesQty"] = max(0.0, acc["totalSalesQty"] - qty)
 
         for row in order_items_rows:
             qty = toInt(_obj_get(row, "qty"))
@@ -2077,6 +2215,9 @@ class DatabaseStorage:
         query = search.strip() if isinstance(search, str) else ""
         has_query = len(query) > 0
         like = f"%{query.lower()}%"
+        digits_query = "".join(ch for ch in query if ch.isdigit())
+        has_digits_query = len(digits_query) > 0
+        like_digits = f"%{digits_query}%"
 
         rows = await self.inventoryPool.fetch(
             """
@@ -2087,12 +2228,15 @@ class DatabaseStorage:
                 NOT $2::boolean
                 OR LOWER(name) LIKE $3
                 OR LOWER(COALESCE(phone, '')) LIKE $3
+                OR ($4::boolean AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') LIKE $5)
               )
             ORDER BY archived_at IS NOT NULL, name ASC
             """,
             includeArchived,
             has_query,
             like,
+            has_digits_query,
+            like_digits,
         )
 
         return [self.mapCustomerRow(row) for row in rows]
@@ -2180,6 +2324,25 @@ class DatabaseStorage:
         return self.mapCustomerRow(row)
 
     async def createOrder(self, input_data: CreateOrderInput | Mapping[str, Any]) -> dict[str, Any]:
+        max_retries = 3
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self.createOrderAttempt(input_data)
+            except Exception as err:  # noqa: PERF203
+                last_error = err
+                if isSerializationError(err) and attempt < max_retries - 1:
+                    delay_ms = min(100 * (2**attempt), 1000)
+                    await asyncio.sleep(delay_ms / 1000)
+                    continue
+                raise
+
+        raise Exception(
+            f"Failed to create order after {max_retries} attempts due to concurrent access: {last_error or 'unknown error'}"
+        )
+
+    async def createOrderAttempt(self, input_data: CreateOrderInput | Mapping[str, Any]) -> dict[str, Any]:
         data = _as_dict(input_data)
         note_raw = data.get("note")
         note = note_raw.strip() if isinstance(note_raw, str) and note_raw.strip() else None
@@ -2191,42 +2354,42 @@ class DatabaseStorage:
         for item in items_data:
             item_dict = _as_dict(item)
             smart = requireNonEmpty(item_dict.get("smart"), "SMART код")
-            qty = toInt(item_dict.get("qty"))
+            qty = requirePositiveInteger(item_dict.get("qty"), "Количество в позиции")
             sale_price = requireNonNegativeNumberString(item_dict.get("salePrice"), "Цена продажи")
             box_number = requireBoxName(item_dict.get("boxNumber"), "Номер коробки")
             item_ids_raw = item_dict.get("itemIds")
             item_ids: list[int] | None = None
             if isinstance(item_ids_raw, list):
                 parsed: list[int] = []
+                seen_in_item: set[int] = set()
                 for raw in item_ids_raw:
-                    val = toInt(raw)
-                    if val > 0:
-                        parsed.append(val)
-                # De-duplicate while keeping order.
-                uniq: list[int] = []
-                seen: set[int] = set()
-                for v in parsed:
-                    if v in seen:
-                        continue
-                    seen.add(v)
-                    uniq.append(v)
-                if len(uniq) > 0:
-                    item_ids = uniq
+                    val = requirePositiveInteger(raw, "ID экземпляра")
+                    if val in seen_in_item:
+                        raise InvalidRequestError("Один и тот же экземпляр указан дважды в позиции")
+                    seen_in_item.add(val)
+                    parsed.append(val)
+                if len(parsed) > 0:
+                    item_ids = parsed
 
             normalized_items.append(
                 {"smart": smart, "qty": qty, "salePrice": sale_price, "boxNumber": box_number, "itemIds": item_ids}
             )
 
+        used_item_ids: set[int] = set()
         for item in normalized_items:
-            if item["qty"] <= 0:
-                raise InvalidRequestError("Количество в позиции должно быть положительным")
             if not self.smartCache.getBySmart(cast(str, item["smart"])):
                 raise InvalidRequestError(f"SMART код не найден в справочнике: {item['smart']}")
+            item_ids = item.get("itemIds")
+            if isinstance(item_ids, list):
+                if len(item_ids) != toInt(item["qty"]):
+                    raise InvalidRequestError("Количество выбранных экземпляров должно совпадать с qty")
+                for item_id in item_ids:
+                    if item_id in used_item_ids:
+                        raise InvalidRequestError("Один и тот же экземпляр выбран в нескольких позициях")
+                    used_item_ids.add(item_id)
 
         shipment = _as_dict(data.get("shipment"))
-        shipping_method_id = toInt(shipment.get("shippingMethodId"))
-        if shipping_method_id <= 0:
-            raise InvalidRequestError("Способ доставки обязателен")
+        shipping_method_id = requirePositiveInteger(shipment.get("shippingMethodId"), "Способ доставки")
         track_raw = shipment.get("trackNumber")
         track_number = track_raw.strip() if isinstance(track_raw, str) and track_raw.strip() else None
         delivery_price = requireNonNegativeNumberString(shipment.get("deliveryPrice"), "Стоимость доставки")
@@ -2241,11 +2404,11 @@ class DatabaseStorage:
                 customer_data = data.get("customer")
                 if customer_id_raw:
                     customer_row = await client.fetchrow(
-                        "SELECT id FROM inventory.customers WHERE id = $1",
+                        "SELECT id FROM inventory.customers WHERE id = $1 AND archived_at IS NULL",
                         customer_id_raw,
                     )
                     if customer_row is None:
-                        raise InvalidRequestError("Клиент не найден")
+                        raise InvalidRequestError("Клиент не найден или архивирован")
                     customer_id = toInt(_obj_get(customer_row, "id"))
                 elif customer_data:
                     customer = _as_dict(customer_data)
@@ -2274,6 +2437,8 @@ class DatabaseStorage:
                 is_pickup = bool(_obj_get(shipping_method, "is_pickup"))
 
                 delivery_payer = shipment.get("deliveryPayer")
+                if delivery_payer is not None and delivery_payer not in ("seller", "buyer"):
+                    raise InvalidRequestError("Некорректное значение deliveryPayer")
                 if is_pickup and delivery_price_num == 0:
                     delivery_payer = None
                 if delivery_price_num > 0 and not delivery_payer:
@@ -2496,9 +2661,12 @@ class DatabaseStorage:
                     )
 
                 await client.execute("COMMIT")
-                details = await self.getOrderById(order_id)
+                try:
+                    details = await self.getOrderById(order_id)
+                except Exception:
+                    details = None
                 if details is None:
-                    raise Exception("Order not found after creation")
+                    return {"id": order_id}
                 return details
             except Exception:
                 await client.execute("ROLLBACK")
@@ -2894,94 +3062,619 @@ class DatabaseStorage:
             "financial": financial,
         }
 
+    async def returnLegacySaleMovement(
+        self,
+        sale_movement_id: int,
+        box_name_input: str,
+        note_input: str | None = None,
+    ) -> dict[str, Any]:
+        client = await self.inventoryPool.acquire()
+        try:
+            await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            try:
+                sale_row = await client.fetchrow(
+                    """
+                    SELECT *
+                    FROM inventory.movements
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                    sale_movement_id,
+                )
+                if sale_row is None:
+                    raise InvalidRequestError("Продажа не найдена")
+                if _obj_get(sale_row, "reason") != "sale":
+                    raise InvalidRequestError("Возврат возможен только для продажи")
+                if _obj_get(sale_row, "order_id") is not None:
+                    raise InvalidRequestError("Продажи из заказов возвращаются через карточку заказа")
+
+                qty = abs(toInt(_obj_get(sale_row, "qty_delta")))
+                if qty <= 0:
+                    raise InvalidRequestError("Некорректное количество в продаже")
+
+                box_name = await self.requireActiveBoxNameTx(client, box_name_input, "Номер коробки")
+
+                existing_return = await client.fetchrow(
+                    """
+                    SELECT id
+                    FROM inventory.movements
+                    WHERE reason = 'return'
+                      AND linked_movement_id = $1
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    sale_movement_id,
+                )
+                if existing_return is not None:
+                    raise InvalidRequestError("Товар уже возвращен на склад")
+
+                sold_rows = await client.fetch(
+                    """
+                    SELECT i.id, i.state, i.sold_movement_id
+                    FROM inventory.movement_items mi
+                    JOIN inventory.items i ON i.id = mi.item_id
+                    WHERE mi.movement_id = $1
+                    ORDER BY i.id ASC
+                    FOR UPDATE
+                    """,
+                    sale_movement_id,
+                )
+                sold_ids = [
+                    toInt(_obj_get(r, "id"))
+                    for r in sold_rows
+                    if _obj_get(r, "state") == "sold" and toInt(_obj_get(r, "sold_movement_id")) == sale_movement_id
+                ]
+                if len(sold_ids) < qty:
+                    raise InvalidRequestError("Товар уже возвращен на склад")
+
+                note = (note_input or "").strip() or f"Возврат продажи #{sale_movement_id}"
+                return_row = await client.fetchrow(
+                    """
+                    INSERT INTO inventory.movements (
+                      smart, qty_delta, reason, note,
+                      purchase_price, sale_price, delivery_price,
+                      box_number, track_number, shipping_method_id, sale_status,
+                      order_id, order_item_id, shipment_id, return_id,
+                      linked_movement_id,
+                      created_at
+                    )
+                    VALUES ($1,$2,'return',$3,NULL,NULL,NULL,$4,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$5,NOW())
+                    RETURNING *
+                    """,
+                    _obj_get(sale_row, "smart"),
+                    qty,
+                    note,
+                    box_name,
+                    sale_movement_id,
+                )
+                if return_row is None:
+                    raise Exception("Return movement not created")
+
+                return_movement_id = toInt(_obj_get(return_row, "id"))
+                await client.execute(
+                    """
+                    UPDATE inventory.items
+                    SET state = 'in_stock',
+                        box_number = $1,
+                        sold_movement_id = NULL,
+                        written_off_movement_id = NULL,
+                        last_movement_id = $2,
+                        updated_at = NOW()
+                    WHERE id = ANY($3::bigint[])
+                    """,
+                    box_name,
+                    return_movement_id,
+                    sold_ids,
+                )
+                await client.execute(
+                    """
+                    INSERT INTO inventory.movement_items (movement_id, item_id)
+                    SELECT $1, UNNEST($2::bigint[])
+                    """,
+                    return_movement_id,
+                    sold_ids,
+                )
+                await client.execute(
+                    """
+                    UPDATE inventory.movements
+                    SET linked_movement_id = $1
+                    WHERE id = $2
+                      AND linked_movement_id IS NULL
+                    """,
+                    return_movement_id,
+                    sale_movement_id,
+                )
+
+                await client.execute("COMMIT")
+                return self.enrichMovement(self.mapMovementRow(return_row))
+            except Exception:
+                await client.execute("ROLLBACK")
+                raise
+        finally:
+            await self.inventoryPool.release(client)
+
+    # FSM: допустимые переходы статуса отправки (только вперёд).
+    _SHIPMENT_TRANSITIONS: dict[str, set[str]] = {
+        "pending": {"shipped"},
+        "shipped": {"delivered"},
+        # delivered — терминальный статус, переходов нет.
+    }
+
     async def updateShipmentStatus(self, shipment_id: int, status: ShipmentStatus) -> dict[str, Any]:
-        row = await self.inventoryPool.fetchrow(
-            """
-            UPDATE inventory.shipments s
-            SET status = $1, updated_at = NOW()
-            FROM inventory.shipping_methods sm
-            WHERE s.shipping_method_id = sm.id
-              AND s.id = $2
-            RETURNING
-              s.id,
-              s.order_id,
-              s.shipping_method_id,
-              sm.name as shipping_method_name,
-              sm.is_pickup,
-              s.track_number,
-              s.delivery_price::text as delivery_price,
-              s.delivery_payer,
-              s.status,
-              s.created_at,
-              s.updated_at
-            """,
-            status,
-            shipment_id,
-        )
-        if row is None:
-            raise Exception("Shipment not found")
+        client = await self.inventoryPool.acquire()
+        try:
+            await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            try:
+                current = await client.fetchrow(
+                    "SELECT status FROM inventory.shipments WHERE id = $1 FOR UPDATE",
+                    shipment_id,
+                )
+                if current is None:
+                    raise Exception("Shipment not found")
 
-        item_rows = await self.inventoryPool.fetch(
-            """
-            SELECT id, order_item_id, qty, created_at
-            FROM inventory.shipment_items
-            WHERE shipment_id = $1
-            ORDER BY id
-            """,
-            shipment_id,
-        )
+                cur_status = cast(str, _obj_get(current, "status"))
+                allowed = self._SHIPMENT_TRANSITIONS.get(cur_status, set())
+                if status not in allowed:
+                    raise InvalidRequestError(
+                        f"Нельзя сменить статус отправки с «{cur_status}» на «{status}»"
+                    )
 
-        await self.inventoryPool.execute(
-            """
-            UPDATE inventory.movements
-            SET sale_status = $1,
-                shipment_id = $2
-            WHERE reason = 'sale'
-              AND order_item_id = ANY(
-                SELECT order_item_id
-                FROM inventory.shipment_items
-                WHERE shipment_id = $2
-              )
-            """,
-            self.mapShipmentStatusToSaleStatus(status),
-            shipment_id,
-        )
+                row = await client.fetchrow(
+                    """
+                    UPDATE inventory.shipments s
+                    SET status = $1, updated_at = NOW()
+                    FROM inventory.shipping_methods sm
+                    WHERE s.shipping_method_id = sm.id
+                      AND s.id = $2
+                    RETURNING
+                      s.id,
+                      s.order_id,
+                      s.shipping_method_id,
+                      sm.name as shipping_method_name,
+                      sm.is_pickup,
+                      s.track_number,
+                      s.delivery_price::text as delivery_price,
+                      s.delivery_payer,
+                      s.status,
+                      s.created_at,
+                      s.updated_at
+                    """,
+                    status,
+                    shipment_id,
+                )
+                if row is None:
+                    raise Exception("Shipment not found")
 
-        return {
-            "id": _obj_get(row, "id"),
-            "orderId": _obj_get(row, "order_id"),
-            "shippingMethodId": _obj_get(row, "shipping_method_id"),
-            "shippingMethodName": _obj_get(row, "shipping_method_name"),
-            "isPickup": bool(_obj_get(row, "is_pickup")),
-            "trackNumber": _obj_get(row, "track_number"),
-            "deliveryPrice": toNumberString(_obj_get(row, "delivery_price")),
-            "deliveryPayer": _obj_get(row, "delivery_payer"),
-            "status": _obj_get(row, "status"),
-            "createdAt": toDateIso(_obj_get(row, "created_at")),
-            "updatedAt": toDateIso(_obj_get(row, "updated_at")),
-            "items": [
-                {
-                    "id": _obj_get(item, "id"),
-                    "shipmentId": shipment_id,
-                    "orderItemId": _obj_get(item, "order_item_id"),
-                    "qty": toInt(_obj_get(item, "qty")),
-                    "createdAt": toDateIso(_obj_get(item, "created_at")),
+                item_rows = await client.fetch(
+                    """
+                    SELECT id, order_item_id, qty, created_at
+                    FROM inventory.shipment_items
+                    WHERE shipment_id = $1
+                    ORDER BY id
+                    FOR UPDATE
+                    """,
+                    shipment_id,
+                )
+
+                # Update only movements that belong to this shipment.
+                await client.execute(
+                    """
+                    UPDATE inventory.movements
+                    SET sale_status = $1,
+                        shipment_id = $2
+                    WHERE reason = 'sale'
+                      AND shipment_id = $2
+                    """,
+                    self.mapShipmentStatusToSaleStatus(status),
+                    shipment_id,
+                )
+
+                await client.execute("COMMIT")
+                return {
+                    "id": _obj_get(row, "id"),
+                    "orderId": _obj_get(row, "order_id"),
+                    "shippingMethodId": _obj_get(row, "shipping_method_id"),
+                    "shippingMethodName": _obj_get(row, "shipping_method_name"),
+                    "isPickup": bool(_obj_get(row, "is_pickup")),
+                    "trackNumber": _obj_get(row, "track_number"),
+                    "deliveryPrice": toNumberString(_obj_get(row, "delivery_price")),
+                    "deliveryPayer": _obj_get(row, "delivery_payer"),
+                    "status": _obj_get(row, "status"),
+                    "createdAt": toDateIso(_obj_get(row, "created_at")),
+                    "updatedAt": toDateIso(_obj_get(row, "updated_at")),
+                    "items": [
+                        {
+                            "id": _obj_get(item, "id"),
+                            "shipmentId": shipment_id,
+                            "orderItemId": _obj_get(item, "order_item_id"),
+                            "qty": toInt(_obj_get(item, "qty")),
+                            "createdAt": toDateIso(_obj_get(item, "created_at")),
+                        }
+                        for item in item_rows
+                    ],
                 }
-                for item in item_rows
-            ],
-        }
+            except Exception:
+                await client.execute("ROLLBACK")
+                raise
+        finally:
+            await self.inventoryPool.release(client)
+
+    async def _moveSaleMovementQtyBetweenShipments(
+        self,
+        client: DbConnectionProtocol,
+        order_id: int,
+        order_item_id: int,
+        from_shipment_id: int,
+        to_shipment_id: int,
+        qty_to_move: int,
+        track_number: str | None,
+        shipping_method_id: int,
+    ) -> None:
+        remaining = qty_to_move
+        movement_rows = await client.fetch(
+            """
+            SELECT *
+            FROM inventory.movements
+            WHERE reason = 'sale'
+              AND order_id = $1
+              AND order_item_id = $2
+              AND shipment_id = $3
+            ORDER BY id ASC
+            FOR UPDATE
+            """,
+            order_id,
+            order_item_id,
+            from_shipment_id,
+        )
+
+        for movement in movement_rows:
+            if remaining <= 0:
+                break
+            movement_id = toInt(_obj_get(movement, "id"))
+            available_qty = abs(toInt(_obj_get(movement, "qty_delta")))
+            if available_qty <= 0:
+                continue
+            moving_qty = min(available_qty, remaining)
+            if moving_qty <= 0:
+                continue
+
+            picked_rows = await client.fetch(
+                """
+                SELECT mi.item_id
+                FROM inventory.movement_items mi
+                JOIN inventory.items i ON i.id = mi.item_id
+                WHERE mi.movement_id = $1
+                  AND i.state = 'sold'
+                  AND i.sold_movement_id = $1
+                ORDER BY mi.item_id ASC
+                LIMIT $2
+                FOR UPDATE OF mi, i
+                """,
+                movement_id,
+                moving_qty,
+            )
+            item_ids = [toInt(_obj_get(r, "item_id")) for r in picked_rows]
+            if len(item_ids) != moving_qty:
+                raise InvalidRequestError(
+                    "Недостаточно проданных экземпляров для переразделения отгрузки. "
+                    "Возможно, часть товара уже возвращена."
+                )
+
+            if moving_qty == available_qty:
+                await client.execute(
+                    """
+                    UPDATE inventory.movements
+                    SET shipment_id = $1,
+                        shipping_method_id = $2,
+                        track_number = $3,
+                        sale_status = 'awaiting_shipment',
+                        delivery_price = NULL
+                    WHERE id = $4
+                    """,
+                    to_shipment_id,
+                    shipping_method_id,
+                    track_number,
+                    movement_id,
+                )
+                remaining -= moving_qty
+                continue
+
+            remaining_qty = available_qty - moving_qty
+            await client.execute(
+                """
+                UPDATE inventory.movements
+                SET qty_delta = $1,
+                    delivery_price = NULL
+                WHERE id = $2
+                """,
+                -remaining_qty,
+                movement_id,
+            )
+
+            moved_row = await client.fetchrow(
+                """
+                INSERT INTO inventory.movements (
+                  smart, qty_delta, reason, note,
+                  purchase_price, sale_price, delivery_price,
+                  box_number, track_number, shipping_method_id, sale_status,
+                  order_id, order_item_id, shipment_id, return_id,
+                  linked_movement_id,
+                  created_at
+                )
+                VALUES ($1,$2,'sale',$3,NULL,$4,NULL,$5,$6,$7,'awaiting_shipment',$8,$9,$10,NULL,NULL,NOW())
+                RETURNING id
+                """,
+                _obj_get(movement, "smart"),
+                -moving_qty,
+                _obj_get(movement, "note"),
+                _obj_get(movement, "sale_price"),
+                _obj_get(movement, "box_number"),
+                track_number,
+                shipping_method_id,
+                order_id,
+                order_item_id,
+                to_shipment_id,
+            )
+            if moved_row is None:
+                raise Exception("Failed to split sale movement")
+            moved_movement_id = toInt(_obj_get(moved_row, "id"))
+
+            await client.execute(
+                """
+                DELETE FROM inventory.movement_items
+                WHERE movement_id = $1
+                  AND item_id = ANY($2::bigint[])
+                """,
+                movement_id,
+                item_ids,
+            )
+            await client.execute(
+                """
+                INSERT INTO inventory.movement_items (movement_id, item_id)
+                SELECT $1, UNNEST($2::bigint[])
+                """,
+                moved_movement_id,
+                item_ids,
+            )
+            await client.execute(
+                """
+                UPDATE inventory.items
+                SET sold_movement_id = $1,
+                    last_movement_id = $1,
+                    updated_at = NOW()
+                WHERE id = ANY($2::bigint[])
+                """,
+                moved_movement_id,
+                item_ids,
+            )
+
+            remaining -= moving_qty
+
+        if remaining > 0:
+            raise InvalidRequestError("Недостаточно pending-количества для выбранной позиции")
+
+    async def createAdditionalShipment(self, order_id: int, input_data: Mapping[str, Any] | Any) -> dict[str, Any]:
+        data = _as_dict(input_data)
+        shipping_method_id = requirePositiveInteger(data.get("shippingMethodId"), "Способ доставки")
+        delivery_price = requireNonNegativeNumberString(data.get("deliveryPrice"), "Стоимость доставки")
+        delivery_price_num = toFloat(delivery_price)
+        track_raw = data.get("trackNumber")
+        track_number = track_raw.strip() if isinstance(track_raw, str) and track_raw.strip() else None
+        delivery_payer = data.get("deliveryPayer")
+        if delivery_payer is not None and delivery_payer not in ("seller", "buyer"):
+            raise InvalidRequestError("Некорректное значение deliveryPayer")
+
+        items_raw = data.get("items")
+        if not isinstance(items_raw, list) or len(items_raw) == 0:
+            raise InvalidRequestError("Добавьте хотя бы одну позицию в отгрузку")
+
+        requested_by_order_item: dict[int, int] = {}
+        for item in items_raw:
+            row = _as_dict(item)
+            order_item_id = requirePositiveInteger(row.get("orderItemId"), "orderItemId")
+            qty = requirePositiveInteger(row.get("qty"), "Количество в отгрузке")
+            requested_by_order_item[order_item_id] = requested_by_order_item.get(order_item_id, 0) + qty
+
+        client = await self.inventoryPool.acquire()
+        try:
+            await client.execute("BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            try:
+                order_row = await client.fetchrow("SELECT id FROM inventory.orders WHERE id = $1", order_id)
+                if order_row is None:
+                    raise InvalidRequestError("Заказ не найден")
+
+                shipping_method = await client.fetchrow(
+                    "SELECT id, is_pickup FROM inventory.shipping_methods WHERE id = $1",
+                    shipping_method_id,
+                )
+                if shipping_method is None:
+                    raise InvalidRequestError("Способ доставки не найден")
+                is_pickup = bool(_obj_get(shipping_method, "is_pickup"))
+                if is_pickup and delivery_price_num == 0:
+                    delivery_payer = None
+                if delivery_price_num > 0 and not delivery_payer:
+                    raise InvalidRequestError("Укажите, кто платит за доставку")
+
+                shipment_status: ShipmentStatus = "delivered" if is_pickup else "pending"
+
+                order_item_rows = await client.fetch(
+                    """
+                    SELECT id
+                    FROM inventory.order_items
+                    WHERE order_id = $1
+                      AND id = ANY($2::int[])
+                    FOR UPDATE
+                    """,
+                    order_id,
+                    list(requested_by_order_item.keys()),
+                )
+                found_order_item_ids = {toInt(_obj_get(r, "id")) for r in order_item_rows}
+                missing = [oid for oid in requested_by_order_item.keys() if oid not in found_order_item_ids]
+                if missing:
+                    raise InvalidRequestError(f"Позиции заказа не найдены: {', '.join(str(v) for v in missing)}")
+
+                shipment_row = await client.fetchrow(
+                    """
+                    INSERT INTO inventory.shipments (
+                      order_id, shipping_method_id, track_number, delivery_price, delivery_payer, status, created_at, updated_at
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+                    RETURNING id
+                    """,
+                    order_id,
+                    shipping_method_id,
+                    track_number,
+                    delivery_price,
+                    delivery_payer,
+                    shipment_status,
+                )
+                if shipment_row is None:
+                    raise Exception("Shipment not created")
+                new_shipment_id = toInt(_obj_get(shipment_row, "id"))
+
+                for order_item_id, requested_qty in requested_by_order_item.items():
+                    donor_rows = await client.fetch(
+                        """
+                        SELECT
+                          si.id,
+                          si.shipment_id,
+                          si.qty
+                        FROM inventory.shipment_items si
+                        JOIN inventory.shipments s ON s.id = si.shipment_id
+                        WHERE s.order_id = $1
+                          AND si.order_item_id = $2
+                          AND s.status = 'pending'
+                          AND si.shipment_id <> $3
+                        ORDER BY s.created_at ASC, s.id ASC, si.id ASC
+                        FOR UPDATE
+                        """,
+                        order_id,
+                        order_item_id,
+                        new_shipment_id,
+                    )
+
+                    remaining = requested_qty
+                    for donor in donor_rows:
+                        if remaining <= 0:
+                            break
+                        donor_item_id = toInt(_obj_get(donor, "id"))
+                        donor_shipment_id = toInt(_obj_get(donor, "shipment_id"))
+                        donor_qty = toInt(_obj_get(donor, "qty"))
+                        if donor_qty <= 0:
+                            continue
+                        move_qty = min(remaining, donor_qty)
+
+                        if donor_qty == move_qty:
+                            await client.execute("DELETE FROM inventory.shipment_items WHERE id = $1", donor_item_id)
+                        else:
+                            await client.execute(
+                                "UPDATE inventory.shipment_items SET qty = $1 WHERE id = $2",
+                                donor_qty - move_qty,
+                                donor_item_id,
+                            )
+
+                        existing_target = await client.fetchrow(
+                            """
+                            SELECT id, qty
+                            FROM inventory.shipment_items
+                            WHERE shipment_id = $1
+                              AND order_item_id = $2
+                            FOR UPDATE
+                            """,
+                            new_shipment_id,
+                            order_item_id,
+                        )
+                        if existing_target is None:
+                            await client.execute(
+                                """
+                                INSERT INTO inventory.shipment_items (shipment_id, order_item_id, qty, created_at)
+                                VALUES ($1, $2, $3, NOW())
+                                """,
+                                new_shipment_id,
+                                order_item_id,
+                                move_qty,
+                            )
+                        else:
+                            await client.execute(
+                                """
+                                UPDATE inventory.shipment_items
+                                SET qty = $1
+                                WHERE id = $2
+                                """,
+                                toInt(_obj_get(existing_target, "qty")) + move_qty,
+                                toInt(_obj_get(existing_target, "id")),
+                            )
+
+                        await self._moveSaleMovementQtyBetweenShipments(
+                            client=client,
+                            order_id=order_id,
+                            order_item_id=order_item_id,
+                            from_shipment_id=donor_shipment_id,
+                            to_shipment_id=new_shipment_id,
+                            qty_to_move=move_qty,
+                            track_number=track_number,
+                            shipping_method_id=shipping_method_id,
+                        )
+                        remaining -= move_qty
+
+                    if remaining > 0:
+                        raise InvalidRequestError(
+                            f"Недостаточно pending-количества для позиции #{order_item_id}: требуется {requested_qty}"
+                        )
+
+                await client.execute("COMMIT")
+                details = await self.getOrderById(order_id)
+                if details is None:
+                    return {"id": new_shipment_id, "orderId": order_id}
+                created = next((s for s in details.get("shipments", []) if toInt(s.get("id")) == new_shipment_id), None)
+                if created is None:
+                    return {"id": new_shipment_id, "orderId": order_id}
+                return created
+            except Exception:
+                await client.execute("ROLLBACK")
+                raise
+        finally:
+            await self.inventoryPool.release(client)
 
     async def createOrderReturn(self, order_id: int, input_data: CreateOrderReturnInput | Mapping[str, Any]) -> dict[str, Any]:
+        max_retries = 3
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self.createOrderReturnAttempt(order_id, input_data)
+            except Exception as err:  # noqa: PERF203
+                last_error = err
+                if isSerializationError(err) and attempt < max_retries - 1:
+                    delay_ms = min(100 * (2**attempt), 1000)
+                    await asyncio.sleep(delay_ms / 1000)
+                    continue
+                raise
+
+        raise Exception(
+            f"Failed to create order return after {max_retries} attempts due to concurrent access: "
+            f"{last_error or 'unknown error'}"
+        )
+
+    async def createOrderReturnAttempt(self, order_id: int, input_data: CreateOrderReturnInput | Mapping[str, Any]) -> dict[str, Any]:
         data = _as_dict(input_data)
         return_price = requireNonNegativeNumberString(data.get("returnPrice"), "Стоимость обратной доставки")
         return_price_num = toFloat(return_price)
         kind = cast(str, data.get("kind") or "return")
+        if kind not in ("return", "correction"):
+            raise InvalidRequestError("Некорректный тип возврата")
         note_raw = data.get("note")
         note = note_raw.strip() if isinstance(note_raw, str) and note_raw.strip() else None
         track_raw = data.get("trackNumber")
         track_number = track_raw.strip() if isinstance(track_raw, str) and track_raw.strip() else None
         return_payer = data.get("returnPayer")
-        shipping_method_id = toInt(data.get("shippingMethodId")) if data.get("shippingMethodId") else None
+        if return_payer is not None and return_payer not in ("seller", "buyer"):
+            raise InvalidRequestError("Некорректное значение returnPayer")
+        shipping_method_id = (
+            requirePositiveInteger(data.get("shippingMethodId"), "Способ обратной доставки")
+            if data.get("shippingMethodId") is not None
+            else None
+        )
 
         items = data.get("items")
         if not isinstance(items, list) or len(items) == 0:
@@ -3031,8 +3724,8 @@ class DatabaseStorage:
                 used_item_ids: set[int] = set()
                 for item in items:
                     item_dict = _as_dict(item)
-                    order_item_id = toInt(item_dict.get("orderItemId"))
-                    qty = toInt(item_dict.get("qty"))
+                    order_item_id = requirePositiveInteger(item_dict.get("orderItemId"), "orderItemId")
+                    qty = requirePositiveInteger(item_dict.get("qty"), "Количество возврата")
                     box_number = requireBoxName(item_dict.get("boxNumber"), "Номер коробки")
                     box_number = await self.requireActiveBoxNameTx(client, box_number, "Номер коробки")
                     item_ids_raw = item_dict.get("itemIds")
@@ -3049,8 +3742,6 @@ class DatabaseStorage:
                             raise InvalidRequestError("Один и тот же экземпляр выбран дважды")
                         used_item_ids.add(val)
                         item_ids.append(val)
-                    if qty <= 0:
-                        raise InvalidRequestError("Количество возврата должно быть положительным")
                     if len(item_ids) != qty:
                         raise InvalidRequestError(
                             f"Выбрано неправильное количество экземпляров для возврата: нужно {qty}, выбрано {len(item_ids)}"
@@ -3078,9 +3769,13 @@ class DatabaseStorage:
                     """,
                     order_id,
                 )
-                sale_movement_id_by_order_item_id = {
-                    toInt(_obj_get(row, "order_item_id")): toInt(_obj_get(row, "id")) for row in sale_rows
-                }
+                sale_movement_ids_by_order_item_id: dict[int, set[int]] = {}
+                for row in sale_rows:
+                    order_item_id = toInt(_obj_get(row, "order_item_id"))
+                    movement_id = toInt(_obj_get(row, "id"))
+                    if order_item_id <= 0 or movement_id <= 0:
+                        continue
+                    sale_movement_ids_by_order_item_id.setdefault(order_item_id, set()).add(movement_id)
 
                 created_return = await client.fetchrow(
                     """
@@ -3110,8 +3805,8 @@ class DatabaseStorage:
                     if len(item_ids) != qty:
                         raise InvalidRequestError("Внутренняя ошибка: неверный набор экземпляров возврата")
 
-                    sale_movement_id = sale_movement_id_by_order_item_id.get(order_item_id)
-                    if not sale_movement_id:
+                    sale_movement_ids = sale_movement_ids_by_order_item_id.get(order_item_id)
+                    if not sale_movement_ids:
                         raise InvalidRequestError(
                             "Невозможно оформить возврат: продажа была создана до учета по экземплярам (items)"
                         )
@@ -3176,9 +3871,9 @@ class DatabaseStorage:
                             raise InvalidRequestError("Выбранный экземпляр относится к другому SMART")
                         if rstate != "sold":
                             raise InvalidRequestError(f"Экземпляр {formatItemCode(iid)} не находится в статусе sold")
-                        if rsold_movement_id != sale_movement_id:
+                        if rsold_movement_id not in sale_movement_ids:
                             raise InvalidRequestError(
-                                f"Экземпляр {formatItemCode(iid)} не относится к этой продаже (позиции заказа)"
+                                f"Экземпляр {formatItemCode(iid)} не относится к этой позиции заказа"
                             )
 
                     await client.execute(
@@ -3207,10 +3902,13 @@ class DatabaseStorage:
                     )
 
                 await client.execute("COMMIT")
-                details = await self.getOrderById(order_id)
+                try:
+                    details = await self.getOrderById(order_id)
+                except Exception:
+                    details = None
                 created = next((r for r in (details or {}).get("returns", []) if toInt(r.get("id")) == return_id), None)
                 if created is None:
-                    raise Exception("Return not found after creation")
+                    return {"id": return_id, "orderId": order_id}
                 return created
             except Exception:
                 await client.execute("ROLLBACK")

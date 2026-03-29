@@ -102,7 +102,9 @@ export function BoxSelector({
   }, [options, value]);
 
   const isLoading = mode === "bySmart" ? smartBoxesQuery.isLoading : boxesQuery.isLoading;
-  const isEmpty = !isLoading && options.length === 0;
+  const isError = mode === "bySmart" ? smartBoxesQuery.isError : boxesQuery.isError;
+  const queryError = (mode === "bySmart" ? smartBoxesQuery.error : boxesQuery.error) as Error | null;
+  const isEmpty = !isLoading && !isError && options.length === 0;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -127,8 +129,20 @@ export function BoxSelector({
         <Command>
           <CommandInput placeholder="Поиск коробки..." />
           <CommandList>
-            <CommandEmpty>{isLoading ? "Загрузка..." : "Ничего не найдено"}</CommandEmpty>
+            <CommandEmpty>{isLoading ? "Загрузка..." : isError ? "Ошибка загрузки" : "Ничего не найдено"}</CommandEmpty>
             <CommandGroup heading={mode === "bySmart" ? "Коробки с товаром" : "Активные коробки"}>
+              {!required && value && (
+                <CommandItem
+                  value="__reset__"
+                  onSelect={() => {
+                    onSelect(null);
+                    setOpen(false);
+                  }}
+                  className="text-muted-foreground"
+                >
+                  Все коробки (сбросить)
+                </CommandItem>
+              )}
               {options.map((option) => (
                 <CommandItem
                   key={option.name}
@@ -171,10 +185,14 @@ export function BoxSelector({
                   : "Нет активных коробок"}
               </div>
             )}
+            {isError && (
+              <div className="px-3 py-3 text-xs text-destructive">
+                {queryError?.message || "Не удалось загрузить список коробок"}
+              </div>
+            )}
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
   );
 }
-

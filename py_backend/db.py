@@ -27,6 +27,11 @@ def _to_asyncpg_ssl_arg(ssl_config: PgSslConfig) -> ssl.SSLContext | None:
     return context
 
 
+async def _init_inventory_connection(conn: asyncpg.Connection) -> None:
+    # Keep DB session timezone aligned with business timezone assumptions.
+    await conn.execute("SET TIME ZONE 'Europe/Moscow'")
+
+
 async def create_db_pools_from_env() -> DbPools:
     config = read_app_config_from_env()
 
@@ -56,6 +61,7 @@ async def create_db_pools_from_env() -> DbPools:
         max_inactive_connection_lifetime=30.0,
         max_size=10,
         min_size=0,
+        init=_init_inventory_connection,
     )
 
     return DbPools(parts_pool=parts_pool, inventory_pool=inventory_pool)

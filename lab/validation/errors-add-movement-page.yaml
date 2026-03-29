@@ -1,0 +1,355 @@
+meta:
+  target: client/src/pages/add-movement.tsx
+  created: 2026-02-12
+  last_updated: 2026-02-12T00:46:37+0400
+  scope:
+    - client/src/pages/add-movement.tsx
+    - client/src/components/smart-search.tsx
+    - client/src/components/box-selector.tsx
+    - shared/schema.ts
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - py_backend/types.py
+  evidence:
+    - lab/validation/agent-browser-movement/prefill-spaces-submit-server-error.png
+    - lab/validation/agent-browser-movement/qty-minus-becomes-zero.png
+    - lab/validation/agent-browser-movement/transfer-invalid-smart-shows-not-found.png
+    - lab/validation/agent-browser-movement/prefill-spaces-transfer-frombox-enabled.png
+
+errors:
+  - id: e-amv001
+    file: shared/schema.ts
+    category: spec-mismatch
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Поле `smart` валидируется как `z.string().min(1)`, без trim.
+      Строка из пробелов считается валидной на клиенте.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      В ручном вводе SmartSearch обычно очищает пробелы, но при prefill из URL
+      (`/movement?smart=%20%20%20`) значение с пробелами попадает в форму.
+      Submit уходит на сервер и падает только там (`SMART код обязательно`).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Клиентская схема должна отбрасывать пробелы и отклонять пустой SMART до отправки.
+    code_example: |
+      # Проблемный код:
+      smart: z.string().min(1, "SMART код обязателен")
+
+      # Как исправить:
+      smart: z.string().trim().min(1, "SMART код обязателен")
+    found_count: 3
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено при раунде 3: клиент и сервер по-разному трактуют пробелы"
+      - agent: explorer-frontend
+        timestamp: 2026-02-12T00:20:00+0400
+        agrees: true
+        note: "Совпадает с анализом формы /movement"
+      - agent: agent-browser-qa
+        timestamp: 2026-02-12T00:46:37+0400
+        agrees: true
+        note: "Воспроизведено: /movement?smart=%20%20%20 + submit purchase -> toast 'Ошибка записи движения SMART код обязательно' (скрин: prefill-spaces-submit-server-error.png)"
+    fix: null
+
+  - id: e-amv002
+    file: client/src/pages/add-movement.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Поле количества парсит значение через `parseInt` на каждый `onChange`.
+      Промежуточные состояния ввода (например, только `-`) сразу заменяются на `0`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для операций со знаком (writeoff/adjust) пользователь получает "прыгающее" поле,
+      часто вводит не тот знак и получает валидационные ошибки не по смыслу действия.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нужно хранить строку ввода до завершения редактирования (blur/submit)
+      и только потом нормализовать в число.
+    code_example: |
+      # Проблемный код:
+      onChange={(e) => {
+        const val = Number.parseInt(e.target.value, 10);
+        field.onChange(Number.isFinite(val) ? val : 0);
+      }}
+
+      # Как исправить:
+      # 1) хранить локально string
+      # 2) парсить в int на blur либо перед submit
+    found_count: 3
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено в раунде 2/3 как UX-блокер для операций с отрицательным qty"
+      - agent: explorer-frontend
+        timestamp: 2026-02-12T00:20:00+0400
+        agrees: true
+        note: "Нестабильный ввод отрицательных значений"
+      - agent: agent-browser-qa
+        timestamp: 2026-02-12T00:46:37+0400
+        agrees: true
+        note: "Воспроизведено: в поле qty ввод '-' сразу даёт значение '0' (скрин: qty-minus-becomes-zero.png)"
+    fix: null
+
+  - id: e-amv003
+    file: client/src/pages/add-movement.tsx
+    category: error-handling
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В блоке transfer при `smartBoxesCount === 0` показывается текст
+      "Товар не найден ни в одной коробке" без учёта `smartBoxesQuery.isError`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При сетевой/серверной ошибке пользователь получает ложный диагноз "товара нет",
+      хотя данные просто не загрузились.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Для `isError` должен быть отдельный UI-сценарий: явная ошибка загрузки
+      и запрет submit до повторной успешной загрузки.
+    code_example: |
+      # Проблемный код:
+      {smartBoxesCount === 0 && !smartBoxesQuery.isLoading && selectedSmart?.trim() ? (
+        <div>Товар не найден ни в одной коробке</div>
+      ) : ...}
+
+      # Как исправить:
+      # сначала проверять smartBoxesQuery.isError и показывать текст ошибки
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено в раунде 4 на стыке UI/Query"
+      - agent: agent-browser-qa
+        timestamp: 2026-02-12T00:46:37+0400
+        agrees: true
+        note: "Воспроизведено: reason=transfer, smart='sm' -> API 400, но UI пишет 'Товар не найден ни в одной коробке' (скрин: transfer-invalid-smart-shows-not-found.png)"
+    fix: null
+
+  - id: e-amv004
+    file: client/src/pages/add-movement.tsx
+    category: logic-error
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Запрос `smartBoxesQuery` активируется при любой непустой строке в `smart`
+      (`enabled: selectedReason === "transfer" && Boolean(selectedSmart?.trim())`),
+      а `smart` обновляется на каждый символ из SmartSearch.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пока пользователь печатает, UI многократно дергает `/api/stock/{smart}/boxes`
+      для промежуточных значений, получает серию 400 и прыгающие состояния.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Триггерить запрос коробок после подтверждённого выбора SMART (onSelect),
+      а не на каждый вводимый символ.
+    code_example: |
+      # Проблемный код:
+      const selectedSmart = form.watch("smart");
+      enabled: selectedReason === "transfer" && Boolean(selectedSmart?.trim())
+
+      # Как исправить:
+      # добавить отдельный state `selectedSmartExact` и обновлять его только в SmartSearch.onSelect
+    found_count: 2
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено при анализе потока данных формы"
+      - agent: agent-browser-qa
+        timestamp: 2026-02-12T00:46:37+0400
+        agrees: true
+        note: "Воспроизведено через performance entries: /api/stock/s/boxes, /api/stock/sm/boxes, /api/stock/smart_00001/boxes за один ввод"
+    fix: null
+
+  - id: e-amv005
+    file: client/src/pages/add-movement.tsx
+    category: state-corruption
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      После успеха кэши инвалидируются по ключам с `variables.smart` без нормализации:
+      `/api/stock/${smart}`, `/api/stock/${smart}/purchases`, `/api/stock/${smart}/sales`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если SMART введён с пробелами, сервер сохранит trim-значение,
+      а клиент инвалидирует ключи с "сырой" строкой.
+      В результате часть страниц останется со stale-данными при `staleTime: Infinity`.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Перед инвалидацией использовать единый канонический SMART (trim + encode при необходимости).
+    code_example: |
+      # Проблемный код:
+      const smart = variables.smart;
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smart}`] });
+
+      # Как исправить:
+      const smartNormalized = String(variables.smart || "").trim();
+      queryClient.invalidateQueries({ queryKey: [`/api/stock/${smartNormalized}`] });
+    found_count: 1
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено в раунде 4 (кэш + canonical key mismatch)"
+    fix: null
+
+  - id: e-amv006
+    file: client/src/components/box-selector.tsx
+    category: edge-case
+    severity: warning
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В `bySmart` режиме отключение кнопки проверяет `!smart`, но `enabled` в query
+      использует `Boolean(smart && String(smart).trim())`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для строки из пробелов селектор остаётся активным, но запрос не выполняется,
+      что выглядит как "пустой список без причины".
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      И для disabled, и для enabled должна использоваться одна и та же trim-нормализация.
+    code_example: |
+      # Проблемный код:
+      disabled={disabled || (mode === "bySmart" && !smart)}
+
+      # Как исправить:
+      const smartValue = String(smart || "").trim();
+      disabled={disabled || (mode === "bySmart" && !smartValue)}
+    found_count: 3
+    rejected_count: 0
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        agrees: true
+        note: "Подтверждено в раунде 3 как воспроизводимый edge-case"
+      - agent: explorer-frontend
+        timestamp: 2026-02-12T00:20:00+0400
+        agrees: true
+        note: "Совпадает с независимой проверкой"
+      - agent: agent-browser-qa
+        timestamp: 2026-02-12T00:46:37+0400
+        agrees: true
+        note: "Воспроизведено: /movement?smart=%20%20%20 + reason=transfer -> fromBox активен, запросов /boxes нет (скрин: prefill-spaces-transfer-frombox-enabled.png)"
+    fix: null
+
+improvements:
+  - id: i-amv001
+    file: client/src/pages/add-movement.tsx
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Инвалидация кэшей после мутации перечислена длинным списком вручную.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Высокий риск забыть один ключ в одном из экранов (add-movement, stock-details и т.д.).
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести в общий helper `invalidateMovementRelatedQueries(queryClient, smart)`.
+    code_example: |
+      # Текущий код:
+      queryClient.invalidateQueries({ queryKey: ["/api/movements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stock"] });
+      ...
+
+      # Как улучшить:
+      invalidateMovementRelatedQueries(queryClient, smartNormalized)
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        note: "Раунд 4: повторяемый шаблон в нескольких страницах"
+    fix: null
+
+  - id: i-amv002
+    file: client/src/pages/add-movement.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Для transfer одновременно существуют `smartBoxesQuery` в родителе и запрос внутри `BoxSelector` по тому же ключу.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Логика распылена в двух местах, сложнее сопровождать состояния loading/error.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Оставить единый источник данных (либо только родитель, либо только BoxSelector через пропсы/контекст).
+    code_example: |
+      # Текущий код:
+      const smartBoxesQuery = useQuery(...)
+      <BoxSelector mode="bySmart" smart={selectedSmart} />
+
+      # Как улучшить:
+      # вариант 1: передавать готовые options в BoxSelector
+      # вариант 2: убрать parent query и отрисовывать состояние по данным BoxSelector
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        note: "Раунд 4: избыточная сложность и дублирование ответственности"
+    fix: null
+
+  - id: i-amv003
+    file: client/src/pages/add-movement.tsx
+    category: suboptimal
+    issue: |
+      ЧТО НЕ ТАК:
+      Для `reason` в defaultValues используется `undefined as any`.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Теряется строгая типизация и маскируются ошибки формы во время рефакторинга.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Явно типизировать optional reason в форме без `any` (через union/nullable тип поля).
+    code_example: |
+      # Текущий код:
+      reason: undefined as any
+
+      # Как улучшить:
+      reason: undefined
+      # и скорректировать тип FormData/схему под optional поле
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        note: "Раунд 4: технический долг типизации"
+    fix: null
+
+  - id: i-amv004
+    file: client/src/pages/add-movement.tsx
+    category: dry-violation
+    issue: |
+      ЧТО НЕ ТАК:
+      Очистка полей при смене `reason` реализована длинной цепочкой `setValue` с повторением.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При добавлении нового reason/поля легко получить регрессию из-за неполной очистки.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Свести правила в таблицу конфигурации и применять единым циклом.
+    code_example: |
+      # Текущий код:
+      if (selectedReason === "purchase") { ... }
+      if (selectedReason === "writeoff") { ... }
+      if (selectedReason === "adjust") { ... }
+      ...
+
+      # Как улучшить:
+      # reasonToFieldsToClear[reason].forEach((name) => form.setValue(name, null))
+    found_count: 1
+    findings:
+      - agent: validator-main
+        timestamp: 2026-02-12T00:22:53+0400
+        note: "Раунд 4: выявлено как источник будущих регрессий"
+    fix: null

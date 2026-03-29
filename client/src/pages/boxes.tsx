@@ -48,7 +48,7 @@ export default function BoxesPage() {
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
 
-  const { data, isLoading } = useQuery<BoxesResponse>({
+  const { data, isLoading, isError, error } = useQuery<BoxesResponse>({
     queryKey: ["/api/boxes"],
   });
 
@@ -181,6 +181,12 @@ export default function BoxesPage() {
                       Загрузка...
                     </TableCell>
                   </TableRow>
+                ) : isError ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-8 text-center text-destructive">
+                      {error instanceof Error ? error.message : "Не удалось загрузить список коробок"}
+                    </TableCell>
+                  </TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
@@ -212,7 +218,7 @@ export default function BoxesPage() {
                   ))
                 )}
 
-                {!isLoading && (
+                {!isLoading && !isError && (
                   <TableRow className="bg-muted/30 hover:bg-muted/40">
                     <TableCell className="font-semibold">
                       <Link href="/boxes/unboxed">
@@ -231,7 +237,7 @@ export default function BoxesPage() {
                   </TableRow>
                 )}
 
-                {!isLoading && (overboxed.positionsCount > 0 || overboxed.totalQty > 0) && (
+                {!isLoading && !isError && (overboxed.positionsCount > 0 || overboxed.totalQty > 0) && (
                   <TableRow className="bg-destructive/5 hover:bg-destructive/10">
                     <TableCell className="font-semibold">
                       <Link href="/boxes/unboxed">

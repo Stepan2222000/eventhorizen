@@ -65,7 +65,7 @@ export default function BoxDetailsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery<BoxDetailsResponse>({
+  const { data, isLoading, isError, error } = useQuery<BoxDetailsResponse>({
     queryKey: [`/api/boxes/${encoded}`],
     enabled: Boolean(boxName),
   });
@@ -81,7 +81,7 @@ export default function BoxDetailsPage() {
   useEffect(() => {
     if (!box) return;
     setDescriptionDraft(box.description || "");
-  }, [box?.description]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [box?.name, box?.description]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateBoxMutation = useMutation({
     mutationFn: async (patch: Record<string, unknown>) => {
@@ -92,6 +92,7 @@ export default function BoxDetailsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/boxes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/boxes?activeOnly=1"] });
       queryClient.invalidateQueries({ queryKey: [`/api/boxes/${encoded}`] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
       toast({ title: "Коробка обновлена" });
       setEditingDescription(false);
     },
@@ -126,7 +127,10 @@ export default function BoxDetailsPage() {
       if (!box) throw new Error("Коробка не загружена");
       if (!transferSmart) throw new Error("SMART не выбран");
       if (!transferToBox) throw new Error("Выберите коробку назначения");
-      const qty = Math.max(1, Math.floor(Number(transferQty || 0)));
+      const qty = Number(transferQty);
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) {
+        throw new Error("Количество должно быть целым положительным числом");
+      }
       if (qty > transferMax) throw new Error(`В коробке только ${transferMax} шт`);
 
       const payload = {
@@ -154,6 +158,10 @@ export default function BoxDetailsPage() {
         queryClient.invalidateQueries({ queryKey: [`/api/stock/${smartEncoded}/boxes`] });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
       toast({ title: "Перемещение выполнено" });
     },
     onError: (error) => {
@@ -200,17 +208,16 @@ export default function BoxDetailsPage() {
     mutationFn: async () => {
       if (!box) throw new Error("Коробка не загружена");
       const diffs = inventoryDiffs.filter((r) => r.diff !== 0);
-      for (const r of diffs) {
-        const payload = {
-          smart: r.smart,
-          qtyDelta: r.diff,
-          reason: "adjust",
-          note: `Инвентаризация: расхождение ${r.diff}`,
-          purchasePrice: null,
-          boxNumber: box.name,
-        };
-        await apiRequest("POST", "/api/movements", payload);
-      }
+      if (diffs.length === 0) return 0;
+      const items = diffs.map((r) => ({
+        smart: r.smart,
+        qtyDelta: r.diff,
+        reason: "adjust",
+        note: `Инвентаризация: расхождение ${r.diff}`,
+        purchasePrice: null,
+        boxNumber: box.name,
+      }));
+      await apiRequest("POST", "/api/movements/batch", { items });
       return diffs.length;
     },
     onSuccess: (count) => {
@@ -229,6 +236,10 @@ export default function BoxDetailsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/unboxed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/sold-out"] });
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=profit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=sales"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/top-parts?mode=combined"] });
+      queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/api/items") });
       toast({ title: "Инвентаризация применена", description: `Создано корректировок: ${count}` });
     },
     onError: (error) => {
@@ -263,6 +274,14 @@ export default function BoxDetailsPage() {
     return (
       <Page title="Коробка" description="Загрузка...">
         <p className="text-sm text-muted-foreground">Загрузка...</p>
+      </Page>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Page title="Коробка" description="Ошибка загрузки">
+        <p className="text-sm text-destructive">{error instanceof Error ? error.message : "Не удалось загрузить коробку"}</p>
       </Page>
     );
   }
@@ -480,9 +499,13 @@ export default function BoxDetailsPage() {
               <Input
                 type="number"
                 min={1}
+                step={1}
                 max={transferMax}
                 value={transferQty}
-                onChange={(e) => setTransferQty(Number(e.target.value) || 1)}
+                onChange={(e) => {
+                  const parsed = Number.parseInt(e.target.value, 10);
+                  setTransferQty(Number.isFinite(parsed) ? parsed : 1);
+                }}
                 data-testid="input-transfer-qty"
               />
             </div>
@@ -602,7 +625,10 @@ export default function BoxDetailsPage() {
                     type="number"
                     min={0}
                     value={addActualQty}
-                    onChange={(e) => setAddActualQty(Number(e.target.value) || 0)}
+                    onChange={(e) => {
+                      const parsed = Number.parseInt(e.target.value, 10);
+                      setAddActualQty(Number.isFinite(parsed) ? parsed : 0);
+                    }}
                     className="font-mono"
                     data-testid="input-inventory-add-qty"
                   />

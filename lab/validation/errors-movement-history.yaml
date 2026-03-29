@@ -5,207 +5,458 @@ meta:
     - client/src/lib/queryClient.ts
     - py_backend/routes.py
     - py_backend/storage.py
-    - py_backend/normalization.py
-    - py_backend/inventory_schema.py
     - shared/schema.ts
-    - lab/box-system-spec.md
-    - lab/item-system-as-is.md
+    - py_backend/normalization.py
+    - lab/data-structure.md
     - lab/data-storage.md
-  created: 2026-02-10
-  last_updated: 2026-02-10T18:47:24+04:00
+  created: 2026-02-12
+  last_updated: 2026-02-12T00:37:30+04:00
   agent: validator-1
 
 errors:
-  - id: e-mh-001
-    file: py_backend/storage.py
-    category: logic-error
+  - id: e-mh-101
+    file: py_backend/routes.py
+    category: error-handling
     severity: warning
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      История движений берётся из БД сортировкой только по `created_at DESC`.
+      Эндпоинт `GET /api/movements` оборачивает вызов `storage.getMovements(...)`
+      в общий `except Exception` и всегда отвечает `500 Failed to get movements`.
 
-      Примеры:
-      - `getMovements()` → `SELECT * FROM inventory.movements ORDER BY created_at DESC`
-      - `getBoxDetails().history` → `... ORDER BY created_at DESC LIMIT ...`
-
-      При этом несколько строк часто создаются в ОДНОЙ транзакции с `NOW()`,
-      а в PostgreSQL `NOW()` = timestamp начала транзакции (одинаковый для всех INSERT внутри транзакции).
-      Это особенно часто для:
-      - `transfer` (всегда 2 строки в одной транзакции)
-      - продаж по заказу (несколько `sale` строк в одной транзакции)
-      - возврат по заказу (несколько `return` строк в одной транзакции)
+      При этом `storage.getMovements()` валидирует `boxNumber` через `requireBoxName()`
+      и может выбросить `InvalidRequestError` (например, при `boxNumber` с `/` или длиной > 50).
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Если `created_at` совпал, порядок строк становится недетерминированным:
-      одна и та же пара transfer (+qty/-qty) может отображаться в разном порядке между запросами.
-      Это заметно на UI “История движений” и “История операций” коробки: строки будут "прыгать".
+      Клиентская ошибка параметра фильтра превращается в серверную 500.
+      На UI это выглядит как "поломка сервера", хотя запрос просто невалидный.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Добавить вторичный стабильный ключ сортировки (например, `id DESC`) в SQL.
-      Тогда при равном `created_at` порядок всегда одинаковый.
+      Для `InvalidRequestError` возвращать 400 с понятным сообщением,
+      а 500 оставлять только для реальных инфраструктурных сбоев.
 
     code_example: |
-      # Проблемный код (py_backend/storage.py):
-      # getMovements():
-      SELECT *
-      FROM inventory.movements
-      ORDER BY created_at DESC
+      # Проблемный код (py_backend/routes.py):
+      @app.get("/api/movements")
+      async def get_movements(request: Request) -> Response:
+          ...
+          try:
+              movements = await storage.getMovements({"boxNumber": box_number} if box_number else None)
+              return JSONResponse(content=movements)
+          except Exception:
+              return JSONResponse(status_code=500, content={"error": "Failed to get movements"})
 
-      # getBoxDetails() history:
-      SELECT *
-      FROM inventory.movements
-      WHERE box_number = $1
-      ORDER BY created_at DESC
-      LIMIT $2
+      # Как исправить:
+      except InvalidRequestError as err:
+          return JSONResponse(status_code=400, content={"error": str(err)})
+      except Exception:
+          return JSONResponse(status_code=500, content={"error": "Failed to get movements"})
 
-      # transferBetweenBoxesAttempt() (оба INSERT используют NOW() внутри одной транзакции):
-      VALUES (..., NOW())
-
-      # Как исправить (пример):
-      ORDER BY created_at DESC, id DESC
-
-    found_count: 1
+    found_count: 2
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:29:30+04:00
+        timestamp: 2026-02-12T00:18:46+04:00
         agrees: true
-        note: "Раунд 2: нестабильный порядок при одинаковом created_at (transfer/заказы/возвраты)."
+        note: "Раунд 3/4: несоответствие статуса ошибки для невалидного boxNumber."
+      - agent: validator-1
+        timestamp: 2026-02-12T00:34:50+04:00
+        agrees: true
+        note: |
+          Практика (agent-browser): `fetch('/api/movements?boxNumber=BAD%2FBOX')`
+          возвращает `500 {"error":"Failed to get movements"}` вместо клиентского 400.
 
     fix: null
 
-  - id: e-mh-002
+  - id: e-mh-102
     file: client/src/pages/movement-history.tsx
     category: error-handling
     severity: warning
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      Страница истории движений читает `isLoading`, но не учитывает `isError/error`.
-      Если запрос /api/movements падает (сеть/500/неавторизован), UI показывает "Нет записанных движений"
-      и выглядит как "пустая история", хотя это ошибка загрузки.
+      Запрос коробок (`/api/boxes`) читается только как `data: boxesData`.
+      Состояния `isError/error` для этого запроса не обрабатываются.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Пользователь делает неверные выводы (например, думает что движений нет),
-      вместо того чтобы увидеть сообщение об ошибке и повторить попытку.
+      При временной ошибке API/сети селект коробок "тихо" остаётся только с пунктом
+      "Все коробки", без индикации проблемы. Пользователь теряет фильтр по коробке
+      и не понимает, что это ошибка загрузки.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Обрабатывать состояние ошибки (`isError`/`error`) и явно показывать ошибку загрузки,
-      плюс дать кнопку/ссылку повторить (`refetch()`).
+      Показывать явную ошибку загрузки коробок (или disabled-селект + retry),
+      чтобы состояние не маскировалось под "просто нет коробок".
+
+    code_example: |
+      // Проблемный код:
+      const { data: boxesData } = useQuery<{ boxes: Array<{ name: string; isActive: boolean }> }>({
+        queryKey: ["/api/boxes"],
+      });
+
+      // В рендере используется только boxesData?.boxes, без ветки boxesError.
+
+      // Как исправить:
+      const { data: boxesData, isError: isBoxesError, error: boxesError, refetch: refetchBoxes } = useQuery(...);
+      // Показать сообщение + кнопку "Повторить".
+
+    found_count: 2
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:18:46+04:00
+        agrees: true
+        note: "Раунд 2/3: ошибка загрузки коробок не отображается."
+      - agent: validator-1
+        timestamp: 2026-02-12T00:34:50+04:00
+        agrees: true
+        note: |
+          Практика (agent-browser): при `network route "**/api/boxes" --abort`
+          селект содержит только "Все коробки", без текста ошибки и без retry.
+
+    fix: null
+
+  - id: e-mh-103
+    file: client/src/pages/movement-history.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Дата/время отображается через `toLocaleString('ru-RU')` без фиксированного timezone.
+      Это означает рендер во временной зоне браузера.
+
+      На сервере же timestamp нормализуется через business timezone (Europe/Moscow)
+      перед сериализацией (`toDateIso`).
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Если рабочая станция не в московской зоне, история на экране показывает
+      смещённое время операций относительно бизнес-часов склада.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Явно зафиксировать timezone на клиенте (`Europe/Moscow`) или явно обозначить,
+      что время показывается в локальной зоне пользователя.
 
     code_example: |
       // client/src/pages/movement-history.tsx
-      const { data: movements, isLoading } = useQuery({ ... });
+      new Date(dateString).toLocaleString('ru-RU', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
 
-      // Ошибка: нет ветки isError/error, а movements может быть undefined.
-      const filteredMovements = (movements as Movement[] || []).filter(...)
+      # py_backend/storage.py
+      # naive datetime трактуется как BUSINESS_TZ и уходит в UTC ISO
+      return dt.astimezone(timezone.utc).isoformat(...).replace("+00:00", "Z")
 
-      // В рендере при isLoading=false и filteredMovements.length===0 будет "Нет записанных движений".
+    found_count: 3
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:18:46+04:00
+        agrees: true
+        note: |
+          Раунд 5: подтверждено как реальный риск для пользователей вне Europe/Moscow.
+          Для локальной московской зоны проблема не проявляется.
+      - agent: validator-1
+        timestamp: 2026-02-12T00:34:50+04:00
+        agrees: true
+        note: |
+          Практика (agent-browser): timezone браузера `Asia/Dubai`.
+          Для одного и того же `createdAt` UI показывает `11.02.2026, 21:32`,
+          а формат в `Europe/Moscow` даёт `11.02.2026, 20:32` (сдвиг +1 час).
+      - agent: validator-1
+        timestamp: 2026-02-12T00:37:30+04:00
+        agrees: true
+        note: |
+          Повторная проверка (agent-browser): `createdAt=2026-02-11T17:36:07.342Z`,
+          локальный рендер (Asia/Dubai) = `11.02.2026, 21:36`,
+          рендер в `Europe/Moscow` = `11.02.2026, 20:36`.
+
+    fix: null
+
+  - id: e-mh-104
+    file: our/algorithms.yaml
+    category: missing-binding
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Для модуля истории движений отсутствует файл `our/algorithms.yaml`,
+      поэтому невозможно проверить обязательные привязки `@alg:` к шагам.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Теряется трассируемость: нельзя автоматически подтвердить, что код страницы
+      соответствует формализованным шагам алгоритма.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Добавить `our/algorithms.yaml` (или актуальный эквивалент) и маркеры `@alg:`
+      в целевых функциях, после чего прогнать binding-проверку повторно.
+
+    code_example: |
+      # Ожидаемое:
+      our/algorithms.yaml
+      @alg: movement-history-load
+      @alg: movement-history-filter
+      @alg: movements-api-list
+
+      # Фактическое:
+      Файл our/algorithms.yaml не найден, маркеры @alg: для модуля не определены.
 
     found_count: 1
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:29:30+04:00
+        timestamp: 2026-02-12T00:18:46+04:00
         agrees: true
-        note: "Раунд 2: ошибка загрузки маскируется под пустой список."
+        note: "Раунд 4: блок проверки привязок формально не может быть завершён."
+
+    fix: null
+
+  - id: e-mh-105
+    file: client/src/pages/movement-history.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При ошибке загрузки `/api/movements` таблица корректно показывает строку ошибки,
+      но нижний блок со счётчиком всё равно рендерится, потому что он зависит только от
+      `!isLoading`, а не от `isError`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь одновременно видит "Failed to fetch" и "Показано 0 движений
+      (отфильтровано из 0 всего)", что выглядит как валидный пустой результат, а не
+      как сбой запроса.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      В состоянии `isError` не показывать счётчик результатов (или заменить его на
+      явный error-state блок), чтобы не смешивать "ошибка" и "пустой список".
+
+    code_example: |
+      // Проблемный код:
+      {isError ? <ErrorRow /> : ...}
+      ...
+      {!isLoading && (
+        <div>Показано {filteredMovements.length} движений ...</div>
+      )}
+
+      // Как исправить:
+      {!isLoading && !isError && (
+        <div>Показано {filteredMovements.length} движений ...</div>
+      )}
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:34:50+04:00
+        agrees: true
+        note: |
+          Практика (agent-browser): при `network route "**/api/movements*" --abort`
+          одновременно отображаются "Failed to fetch" и
+          "Показано 0 движений (отфильтровано из 0 всего)".
+
+    fix: null
+
+  - id: e-mh-106
+    file: client/src/pages/movement-history.tsx
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Текстовый фильтр сравнивается как есть (`includes(filter.toLowerCase())`) без `trim()`.
+      Если пользователь вводит корректное значение с хвостовым/начальным пробелом,
+      совпадения не находятся.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Частый сценарий копипаста из мессенджера/таблицы с лишним пробелом
+      приводит к ложному "Нет совпадений с фильтром", хотя записи есть.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Нормализовать пользовательский запрос (`const q = filter.trim().toLowerCase()`),
+      и фильтровать уже по `q`.
+
+    code_example: |
+      // Текущий код:
+      movement.smart.toLowerCase().includes(filter.toLowerCase())
+
+      // Как исправить:
+      const q = filter.trim().toLowerCase();
+      movement.smart.toLowerCase().includes(q)
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:35:18+04:00
+        agrees: true
+        note: |
+          Практика (agent-browser): `smart_00001` даёт 56 строк, а `smart_00001 `
+          даёт 0 строк и "Нет совпадений с фильтром".
 
     fix: null
 
 improvements:
-  - id: i-mh-001
+  - id: i-mh-201
     file: client/src/pages/movement-history.tsx
     category: suboptimal
 
     issue: |
       ЧТО НЕ ТАК:
-      /api/movements возвращает полный список, а фильтрация делается целиком на клиенте.
-      При росте таблицы movements страница начнёт заметно тормозить:
-      - большой JSON на сеть/парсинг
-      - фильтрация по строкам для каждой перерисовки
+      История фильтруется полностью на клиенте на каждом вводе символа, а таблица
+      рендерит все строки сразу.
 
       ПОЧЕМУ ЭТО ПЛОХО:
-      Реалистичный сценарий: через несколько месяцев в movements будет 10k+ строк,
-      и “История движений” начнёт подвисать при вводе фильтра/открытии.
+      При росте истории (тысячи+ строк) возрастёт нагрузка на рендер и фильтрацию,
+      появятся лаги при вводе и прокрутке.
 
       КАК СДЕЛАТЬ ЛУЧШЕ:
-      Добавить пагинацию/лимит/серверные фильтры (q, boxNumber, smart, date range),
-      и на UI показывать страницу результатов (например, 100-200 строк).
+      Сохранить требование "загружать всё", но добавить:
+      - `useMemo` для фильтрации по `movements + filter`
+      - debounce для ввода фильтра
+      - виртуализацию строк таблицы
 
     code_example: |
-      // py_backend/storage.py
-      SELECT * FROM inventory.movements ORDER BY created_at DESC
-
-      // client/src/pages/movement-history.tsx
+      // Текущий код:
       const filteredMovements = (movements as Movement[] || []).filter(...)
+      // и далее filteredMovements.map(...) рендерит все строки.
 
     found_count: 1
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:29:30+04:00
-        note: "Раунд 4: масштабируемость истории."
+        timestamp: 2026-02-12T00:18:46+04:00
+        note: "Раунд 4: performance-узкое место страницы истории."
 
     fix: null
 
-  - id: i-mh-002
+  - id: i-mh-202
+    file: client/src/pages/movement-history.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика обработки HTTP-ошибок дублируется:
+      - глобально в `throwIfResNotOk` (`client/src/lib/queryClient.ts`)
+      - локально внутри `movement-history.tsx` queryFn.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Поддержка двух версий одной логики повышает риск рассинхронизации
+      (разные форматы ошибок на разных страницах).
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Переиспользовать общую функцию/утилиту для парсинга ошибок и в `movement-history.tsx`.
+
+    code_example: |
+      // Дублирование:
+      // client/src/lib/queryClient.ts -> throwIfResNotOk()
+      // client/src/pages/movement-history.tsx -> ручной parse text/json + throw Error(...)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:18:46+04:00
+        note: "Раунд 4: одинаковая error-логика в двух местах."
+
+    fix: null
+
+  - id: i-mh-203
+    file: client/src/pages/movement-history.tsx
+    category: dead-code
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Импорты `CardHeader` и `CardTitle` не используются в компоненте.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Это шум в коде и лишние зависимости в файле, усложняющие чтение.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Удалить неиспользуемые импорты.
+
+    code_example: |
+      import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+      // CardHeader/CardTitle в JSX не используются
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:18:46+04:00
+        note: "Раунд 1/4: неиспользуемые импорты."
+
+    fix: null
+
+  - id: i-mh-204
     file: client/src/pages/movement-history.tsx
     category: suboptimal
 
     issue: |
       ЧТО НЕ ТАК:
-      qtyDelta=0 (например, миграционная запись reconcile) отображается как "+0" зелёным цветом.
+      `qtyDelta = 0` отображается тем же цветом/паттерном, что и положительные значения
+      (`text-success`, префикс `+`).
 
       ПОЧЕМУ ЭТО ПЛОХО:
-      0 не является ни приходом, ни расходом, но визуально выглядит как "успешный приход".
+      Нулевое изменение визуально воспринимается как "приход", что искажает чтение журнала
+      (особенно для reconcile/миграционных строк).
 
       КАК СДЕЛАТЬ ЛУЧШЕ:
-      Для 0 показывать нейтральный стиль (без '+', muted-цвет), либо отдельный бейдж "0".
+      Для нулевого дельта использовать нейтральный стиль и без знака `+`.
 
     code_example: |
-      // client/src/pages/movement-history.tsx
       movement.qtyDelta >= 0 ? 'text-success' : 'text-destructive'
-      movement.qtyDelta >= 0 ? '+' : ''
+      {movement.qtyDelta >= 0 ? '+' : ''}{movement.qtyDelta}
+
+      // Вариант:
+      // qtyDelta > 0 -> success
+      // qtyDelta < 0 -> destructive
+      // qtyDelta === 0 -> muted, без '+'
 
     found_count: 1
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:29:30+04:00
-        note: "Раунд 4: reconcile-строки из миграции выглядят как +0."
+        timestamp: 2026-02-12T00:18:46+04:00
+        note: "Раунд 4/5: улучшение читаемости журнала."
 
     fix: null
 
-  - id: i-mh-003
+  - id: i-mh-205
     file: client/src/pages/movement-history.tsx
     category: suboptimal
 
     issue: |
       ЧТО НЕ ТАК:
-      Для transfer стрелка/направление хранится в `note` (например, `→ K-7 · user note`),
-      и в UI она показывается и в колонке "Коробка", и дублируется в колонке "Примечание".
+      Счётчик использует фиксированную форму "движений":
+      `Показано {N} движений`.
 
       ПОЧЕМУ ЭТО ПЛОХО:
-      - визуальный шум (дублирование одной и той же информации)
-      - сложнее искать/читать пользовательское примечание (оно смешано с системной стрелкой)
+      Для `N=1` (и части других чисел) строка грамматически неверна
+      (`Показано 1 движений`), что бросается в глаза и выглядит как недоработка UI.
 
       КАК СДЕЛАТЬ ЛУЧШЕ:
-      На UI: в колонке "Примечание" для transfer показывать только пользовательскую часть
-      (после разделителя `·`), а стрелку оставить только в колонке "Коробка".
+      Добавить простую функцию склонения (`движение/движения/движений`) для русского языка.
 
     code_example: |
-      // client/src/pages/movement-history.tsx
-      movement.reason === "transfer" && movement.note
-        ? `${movement.boxNumber || "—"} ${movement.note.split("·")[0].trim()}`
-        : (movement.boxNumber || "—")
+      // Текущее:
+      Показано {count} движений
 
-      // При этом колонка "Примечание" сейчас выводит movement.note целиком.
+      // Улучшение:
+      Показано {count} {pluralizeRu(count, ["движение", "движения", "движений"])}
 
     found_count: 1
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:29:30+04:00
-        note: "Раунд 4: UX улучшение для transfer заметок."
+        timestamp: 2026-02-12T00:35:18+04:00
+        note: |
+          Практика (agent-browser): при выборе коробки с одной записью UI показывает
+          "Показано 1 движений".
 
     fix: null

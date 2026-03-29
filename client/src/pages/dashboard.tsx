@@ -9,7 +9,7 @@ import { Page } from "@/components/page";
 import type { StockLevel, Movement } from "@shared/schema";
 
 export default function Dashboard() {
-  const { data: stats, isLoading: statsLoading } = useQuery<{
+  const { data: stats, isLoading: statsLoading, isError: statsError, error: statsErrorValue } = useQuery<{
     inStock: number;
     totalParts: number;
     movementsToday: number;
@@ -18,11 +18,11 @@ export default function Dashboard() {
     queryKey: ["/api/dashboard/stats"],
   });
 
-  const { data: stockLevels, isLoading: stockLoading } = useQuery({
+  const { data: stockLevels, isLoading: stockLoading, isError: stockError, error: stockErrorValue } = useQuery({
     queryKey: ["/api/stock"],
   });
 
-  const { data: movements, isLoading: movementsLoading } = useQuery({
+  const { data: movements, isLoading: movementsLoading, isError: movementsError, error: movementsErrorValue } = useQuery({
     queryKey: ["/api/movements"],
   });
 
@@ -60,6 +60,8 @@ export default function Dashboard() {
               </div>
               {statsLoading ? (
                 <Skeleton className="h-8 w-20 mb-1" />
+              ) : statsError ? (
+                <h3 className="text-lg font-semibold text-destructive mb-1">Ошибка</h3>
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.inStock || 0}</h3>
               )}
@@ -80,6 +82,8 @@ export default function Dashboard() {
               </div>
               {statsLoading ? (
                 <Skeleton className="h-8 w-20 mb-1" />
+              ) : statsError ? (
+                <h3 className="text-lg font-semibold text-destructive mb-1">Ошибка</h3>
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.totalParts || 0}</h3>
               )}
@@ -99,6 +103,8 @@ export default function Dashboard() {
               </div>
               {statsLoading ? (
                 <Skeleton className="h-8 w-20 mb-1" />
+              ) : statsError ? (
+                <h3 className="text-lg font-semibold text-destructive mb-1">Ошибка</h3>
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.movementsToday || 0}</h3>
               )}
@@ -118,6 +124,8 @@ export default function Dashboard() {
               </div>
               {statsLoading ? (
                 <Skeleton className="h-8 w-20 mb-1" />
+              ) : statsError ? (
+                <h3 className="text-lg font-semibold text-destructive mb-1">Ошибка</h3>
               ) : (
                 <h3 className="text-2xl font-bold text-foreground mb-1 font-mono">{stats?.salesToday || 0}</h3>
               )}
@@ -156,9 +164,17 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+              ) : stockError ? (
+                <p className="text-sm text-destructive">
+                  {stockErrorValue instanceof Error ? stockErrorValue.message : "Ошибка загрузки остатков"}
+                </p>
               ) : (
                 <div className="space-y-3">
-                  {(stockLevels as StockLevel[] || []).slice(0, 5).map((item) => {
+                  {((stockLevels as StockLevel[] || [])
+                    .slice()
+                    .sort((a, b) => Number(b.totalQty || 0) - Number(a.totalQty || 0))
+                    .slice(0, 5))
+                    .map((item) => {
                     const status = getStockStatus(item.totalQty);
                     return (
                       <div key={item.smart} className="flex items-center justify-between p-3 rounded border hover:bg-muted/50 transition-colors">
@@ -212,6 +228,10 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+              ) : movementsError ? (
+                <p className="text-sm text-destructive">
+                  {movementsErrorValue instanceof Error ? movementsErrorValue.message : "Ошибка загрузки движений"}
+                </p>
               ) : (
                 <div className="space-y-3">
                   {(movements as Movement[] || []).slice(0, 5).map((movement) => (

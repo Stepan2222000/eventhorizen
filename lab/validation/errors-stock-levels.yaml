@@ -1,0 +1,412 @@
+meta:
+  target: client/src/pages/stock-levels.tsx
+  created: 2026-02-12
+  last_updated: 2026-02-11T20:34:50Z
+  agent: validator-1
+  context_files:
+    - client/src/lib/queryClient.ts
+    - client/src/components/page.tsx
+    - client/src/App.tsx
+    - py_backend/routes.py
+    - py_backend/storage.py
+    - shared/schema.ts
+  algorithms_yaml: not-found
+
+errors:
+  - id: e-stock-001
+    file: client/src/pages/stock-levels.tsx
+    category: error-handling
+    severity: critical
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница остатков учитывает только `isLoading` и отсутствие данных.
+      Если запрос `/api/stock` падает (БД недоступна, 500, сеть), компонент
+      показывает "Нет данных об остатках".
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь видит ложную картину "остатков нет" вместо ошибки загрузки
+      и может принять неверное решение (например, не отгружать товар или
+      срочно закупать то, что фактически есть на складе).
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При ошибке запроса должен показываться явный error-state (баннер/блок),
+      отдельный от empty-state. Empty-state должен показываться только при
+      успешной загрузке пустого списка.
+
+    code_example: |
+      # Проблемный код:
+      const { data: stockLevels, isLoading } = useQuery({
+        queryKey: ["/api/stock"],
+      });
+      ...
+      ) : filteredStock.length === 0 ? (
+        "Нет данных об остатках"
+      )
+
+      # Как исправить:
+      const { data: stockLevels = [], isLoading, isError, error } = useQuery<StockLevel[]>({
+        queryKey: ["/api/stock"],
+      });
+
+      if (isError) {
+        return <Alert>{error instanceof Error ? error.message : "Ошибка загрузки остатков"}</Alert>;
+      }
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        agrees: true
+        note: "Раунд 2/3: подтверждено по веткам рендера в таблице."
+
+    fix: null
+
+  - id: e-stock-002
+    file: client/src/pages/stock-levels.tsx
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Ссылка на детали строится как `/stock/${item.smart}` без URL-encoding.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Для SMART-кодов с пробелами, `?`, `#`, `%` и другими спецсимволами
+      роут формируется некорректно: открывается не та страница, ломается
+      путь или теряются данные параметра.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Значение SMART в URL должно кодироваться через `encodeURIComponent`.
+
+    code_example: |
+      # Проблемный код:
+      <Link href={`/stock/${item.smart}`}>
+
+      # Как исправить:
+      <Link href={`/stock/${encodeURIComponent(item.smart)}`}>
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        agrees: true
+        note: "Раунд 3/4: подтверждено сравнением с соседним линком на movement, где encoding уже есть."
+
+    fix: null
+
+  - id: e-stock-003
+    file: py_backend/routes.py
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      `GET /api/stock` ловит все исключения и возвращает одинаковый ответ
+      `"Failed to get stock levels"` без логирования причины.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При реальной аварии (DB timeout, SQL ошибка, проблема кэша) причина
+      теряется. Диагностика и восстановление затягиваются, а фронтенд получает
+      только общий текст ошибки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Исключение должно логироваться на сервере (`logger.exception(...)`).
+      Клиенту можно оставлять безопасное общее сообщение, но причина должна
+      быть доступна в логах.
+
+    code_example: |
+      # Проблемный код:
+      @app.get("/api/stock")
+      async def get_stock(request: Request) -> Response:
+          storage = _storage_from_request(request)
+          try:
+              stock = await storage.getStockLevels()
+              return JSONResponse(content=stock)
+          except Exception:
+              return JSONResponse(status_code=500, content={"error": "Failed to get stock levels"})
+
+      # Как исправить:
+      except Exception as err:
+          logger.exception("GET /api/stock failed: %s", err)
+          return JSONResponse(status_code=500, content={"error": "Failed to get stock levels"})
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        agrees: true
+        note: "Раунд 3/5: функционально воспроизводимо при любой внутренней ошибке."
+
+    fix: null
+
+  - id: e-stock-004
+    file: py_backend/storage.py
+    category: race-condition
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      `getStockLevels()` строит ответ двумя отдельными запросами:
+      1) `inventory.stock`
+      2) `inventory.box_contents`
+      Между ними нет транзакции/snapshot-изоляции.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При параллельных движениях за время между запросами `totalQty` и `boxes`
+      могут быть из разных моментов времени. API отдаёт несогласованный снимок.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Читать агрегаты в одном SQL (CTE/JOIN) либо в транзакции с единым
+      snapshot, чтобы поля ответа были консистентны.
+
+    code_example: |
+      # Проблемный код:
+      rows = await self.inventoryPool.fetch("SELECT smart, total_qty FROM inventory.stock ...")
+      box_rows = await self.inventoryPool.fetch("SELECT smart, box_number, qty FROM inventory.box_contents ...")
+
+      # Как исправить:
+      # Вариант 1: один SELECT через JOIN/CTE.
+      # Вариант 2: BEGIN READ ONLY; оба SELECT в одной транзакции; COMMIT.
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        agrees: true
+        note: "Раунд 4: стыковый анализ API-агрегатов и конкурентных движений."
+
+    fix: null
+
+  - id: e-stock-005
+    file: client/src/pages/stock-levels.tsx
+    category: logic-error
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      В колонке "Действия" используется структура `Link -> Button`, то есть
+      интерактивный `button` вложен в интерактивный `a`.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Получаются дублирующиеся focus-цели и невалидная семантика интерактива.
+      В keyboard-навигации пользователь проходит лишние tab-стопы на одной
+      и той же операции ("глаз" и "+"), а поведение активации зависит от браузера.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Должен быть один интерактивный элемент на действие:
+      - либо `Link` c `asChild` и кнопочным стилем,
+      - либо отдельный `button` без вложенного `a`.
+
+    code_example: |
+      # Проблемный код:
+      <Link href={`/stock/${item.smart}`}>
+        <Button ...>...</Button>
+      </Link>
+
+      # Как исправить:
+      <Button asChild ...>
+        <Link href={`/stock/${item.smart}`}>...</Link>
+      </Button>
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:34:50Z
+        agrees: true
+        note: |
+          Практически подтверждено через agent-browser:
+          `document.querySelectorAll('a button').length === 2`.
+          Также snapshot показывает по 2 интерактивных refs на каждое действие (link+button).
+
+    fix: null
+
+  - id: e-stock-006
+    file: client/src/pages/stock-levels.tsx
+    category: edge-case
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Фильтр сравнивает `filter.toLowerCase()` без trim.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Запросы с пробелами по краям (частый сценарий copy-paste) дают
+      ложное "Нет совпадений", хотя позиция есть.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Перед фильтрацией строку нужно нормализовать:
+      `const filterLower = filter.trim().toLowerCase()`.
+
+    code_example: |
+      # Проблемный код:
+      const filterLower = filter.toLowerCase();
+
+      # Как исправить:
+      const filterLower = filter.trim().toLowerCase();
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:34:50Z
+        agrees: true
+        note: |
+          Практически подтверждено через agent-browser:
+          фильтр " smart_00001 " показывает "Нет совпадений с фильтром"
+          при наличии строки smart_00001.
+
+    fix: null
+
+  - id: e-stock-007
+    file: client/src/pages/stock-levels.tsx
+    category: state-corruption
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      При временном падении `/api/stock` страница уходит в empty-state.
+      После восстановления API данные автоматически не перезапрашиваются.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      Пользователь остаётся в ложном состоянии "Нет данных об остатках"
+      до ручного reload страницы, даже когда сервер уже доступен.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      На error-state нужна явная кнопка "Повторить", либо авто-refetch
+      после восстановления сети/API.
+
+    code_example: |
+      # Сценарий воспроизведения (agent-browser):
+      1) network route **/api/stock --abort
+      2) reload -> "Нет данных об остатках"
+      3) network unroute, wait
+      4) данные не возвращаются без manual reload
+
+      # Как исправить:
+      # Показывать error-state с кнопкой retry (refetch()).
+
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:34:50Z
+        agrees: true
+        note: |
+          Практически подтверждено через agent-browser:
+          после `unroute` и ожидания 2.5с UI остаётся в empty-state.
+
+    fix: null
+
+improvements:
+  - id: i-stock-001
+    file: client/src/pages/stock-levels.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Логика `getStockStatus()` (порог 0/10 + label + icon + variant)
+      дублируется в двух местах:
+      - client/src/pages/stock-levels.tsx
+      - client/src/pages/dashboard.tsx
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При изменении порогов/лейблов легко получить расхождение между страницами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести в общий helper (например, `client/src/lib/stock-status.ts`)
+      и использовать на обеих страницах.
+
+    code_example: |
+      # Текущий код:
+      const getStockStatus = (qty: number) => { ... }
+
+      # Как улучшить:
+      import { getStockStatus } from "@/lib/stock-status";
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        note: "Раунд 4: DRY-проверка межстраничных повторов."
+
+    fix: null
+
+  - id: i-stock-002
+    file: client/src/pages/stock-levels.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Фильтрация и сортировка выполняются на каждом рендере без `useMemo`.
+      Для страницы, которая по спецификации грузит весь список без лимита,
+      это даёт лишнюю нагрузку на ввод фильтра и перерисовки.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При росте объёма данных интерфейс начнёт заметно "тормозить".
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Мемоизировать `filteredStock` и `sortedStock` по зависимостям
+      (`stockLevels`, `filter`, `sortKey`, `sortDirection`).
+
+    code_example: |
+      # Текущий код:
+      const filteredStock = ...
+      const sortedStock = ...
+
+      # Как улучшить:
+      const filteredStock = useMemo(() => ..., [stockLevels, filter]);
+      const sortedStock = useMemo(() => ..., [filteredStock, sortKey, sortDirection]);
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        note: "Раунд 3/4: оценка производительности в контексте 'загружать всё'."
+
+    fix: null
+
+  - id: i-stock-003
+    file: client/src/pages/stock-levels.tsx
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Данные запроса приводятся через небезопасный cast:
+      `(stockLevels as StockLevel[] || [])`.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      При дрейфе контракта API ошибка проявится только в рантайме
+      (на этапе `.filter/.map`), а не в типах/валидации.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Явно типизировать `useQuery<StockLevel[]>` и использовать дефолт
+      `data: stockLevels = []`, либо парсить ответ через zod-схему.
+
+    code_example: |
+      # Текущий код:
+      const { data: stockLevels, isLoading } = useQuery({ queryKey: ["/api/stock"] });
+      const filteredStock = (stockLevels as StockLevel[] || []).filter(...)
+
+      # Как улучшить:
+      const { data: stockLevels = [], isLoading } = useQuery<StockLevel[]>({ queryKey: ["/api/stock"] });
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-11T20:17:29Z
+        note: "Раунд 3: типовой контракт фронта и API."
+
+    fix: null

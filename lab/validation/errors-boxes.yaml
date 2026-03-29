@@ -1,413 +1,351 @@
 meta:
   target: |
-    Boxes logic (item-based inventory):
-    - backend: py_backend/{routes.py,storage.py,inventory_schema.py,normalization.py,types.py}
-    - frontend: client/src/{components/box-selector.tsx,components/item-picker-dialog.tsx,pages/{boxes.tsx,box-details.tsx,unboxed.tsx,add-movement.tsx,sold-items.tsx,order-details.tsx,stock-details.tsx}}
-    - spec: lab/item-system-spec.md (2026-02-10), lab/item-system-as-is.md (2026-02-10)
-  created: 2026-02-10
-  last_updated: 2026-02-10T18:59:43+04:00
+    Boxes module (страница "Коробки" и связанные сценарии):
+    - frontend: client/src/pages/{boxes.tsx,box-details.tsx,unboxed.tsx}
+    - components: client/src/components/box-selector.tsx
+    - backend: py_backend/{routes.py,storage.py,inventory_schema.py}
+    - spec: lab/item-system-spec.md, lab/item-system-as-is.md
+  created: 2026-02-12
+  last_updated: 2026-02-12T00:46:42+04:00
   agent: validator-1
 
 # ═══════════════════════════════════════════════════════════════
-# БЛОК 1: КРИТИЧЕСКИЕ ОШИБКИ (баги, которые сломают программу/учет)
+# БЛОК 1: КРИТИЧЕСКИЕ ОШИБКИ (баги)
 # ═══════════════════════════════════════════════════════════════
 
 errors:
-  - id: e-box-001
-    file: py_backend/storage.py
+  - id: e-box-20260212-001
+    file: client/src/pages/box-details.tsx
     category: state-corruption
     severity: critical
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      updateBox() проверяет "пустая ли коробка" ТОЛЬКО если в body пришло строгое boolean-значение `isActive === false`.
+      Инвентаризация в BoxDetails отправляет корректировки в цикле:
+      по одному POST /api/movements на каждую строку расхождения.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Если клиент (или баг на фронте) отправит `isActive: null` или `isActive: 0`,
-      проверка "пустая ли коробка" будет пропущена, но коробка всё равно закроется из-за `bool(value) -> False`.
-      В результате получится закрытая коробка с `in_stock` items внутри, что ломает инварианты item-системы:
-      - BoxSelector скрывает закрытые коробки, и товар становится "заперт" (на складе есть, выбрать коробку нельзя).
+      Если часть запросов прошла успешно, а один из следующих упал (сеть/500/конфликт),
+      система получает частично применённую инвентаризацию.
+      Пользователь видит общую ошибку и часто нажимает "Применить" снова, что
+      создаёт повторные корректировки для уже применённых строк и искажает остатки.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Если поле `isActive` передано:
-      - валидировать тип (строго bool), иначе 400;
-      - при закрытии (isActive=false) всегда проверять, что коробка пуста.
+      Применение инвентаризации должно быть атомарным:
+      либо один backend batch-эндпоинт в транзакции, либо минимум защита от повторного
+      применения уже успешно отправленных строк.
 
     code_example: |
-      # py_backend/storage.py (updateBox)
-      if "isActive" in data and data.get("isActive") is False:
-          not_empty = await self.inventoryPool.fetchrow(
-              "SELECT 1 FROM inventory.box_contents WHERE box_number = $1 LIMIT 1",
-              canonical,
-          )
-          if not_empty is not None:
-              raise InvalidRequestError(f"Нельзя закрыть коробку {canonical}: в ней есть товар")
+      # client/src/pages/box-details.tsx
+      const diffs = inventoryDiffs.filter((r) => r.diff !== 0);
+      for (const r of diffs) {
+        await apiRequest("POST", "/api/movements", {
+          smart: r.smart,
+          qtyDelta: r.diff,
+          reason: "adjust",
+          note: `Инвентаризация: расхождение ${r.diff}`,
+          boxNumber: box.name,
+        });
+      }
 
+    found_count: 1
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:23:38+04:00
+        agrees: true
+        note: "Раунд 3/4: глубокий анализ инвентаризации и сценария частичного фейла"
+
+    fix: null
+
+  - id: e-box-20260212-002
+    file: client/src/pages/boxes.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница /boxes читает только data/isLoading и не обрабатывает isError/error.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При 500/сетевой ошибке /api/boxes UI показывает "Пока нет коробок"
+      как будто это валидное пустое состояние.
+      Пользователь получает ложную картину склада вместо явной ошибки загрузки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      При ошибке запроса показывать отдельный error-state и не маскировать сбой под пустые данные.
+
+    code_example: |
+      # client/src/pages/boxes.tsx
+      const { data, isLoading } = useQuery<BoxesResponse>({ queryKey: ["/api/boxes"] });
+      const boxes = Array.isArray(data?.boxes) ? data!.boxes : [];
       ...
-      if "isActive" in data:
-          set_clauses.append(f"is_active = ${idx}")
-          values.append(bool(data.get("isActive")))
+      {isLoading ? "Загрузка..." : filtered.length === 0 ? "Пока нет коробок" : ...}
 
-      # Потенциально опасный запрос:
-      # PATCH /api/boxes/K-4 { "isActive": null }  -> bool(null)=False, коробка закроется
-
-      # Как исправить (идея):
-      # value = data.get("isActive")
-      # if not isinstance(value, bool): raise InvalidRequestError("isActive must be boolean")
-      # if value is False: проверить пустоту
-      # затем записать is_active = value
-
-    found_count: 1
+    found_count: 3
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:46:36+04:00
+        timestamp: 2026-02-12T00:23:38+04:00
         agrees: true
-        note: "Раунд 2 (поверхностный анализ)"
+        note: "Раунд 2: поверхностный проход по useQuery и веткам рендера"
+      - agent: validator-frontend
+        timestamp: 2026-02-12T00:23:38+04:00
+        agrees: true
+        note: "Параллельный агент подтвердил сценарий с 500 от /api/boxes"
+      - agent: validator-1
+        timestamp: 2026-02-12T00:46:42+04:00
+        agrees: true
+        note: "Практически воспроизведено через agent-browser: при aborted /api/boxes показано 'Пока нет коробок'"
 
     fix: null
 
-  - id: e-box-002
-    file: py_backend/storage.py
+  - id: e-box-20260212-003
+    file: client/src/pages/unboxed.tsx
+    category: error-handling
+    severity: warning
+
+    problem: |
+      КАК СЕЙЧАС РАБОТАЕТ:
+      Страница /boxes/unboxed тоже не обрабатывает isError/error.
+
+      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
+      При сбое /api/unboxed UI показывает "Нет расхождений".
+      Это ложный "зелёный" сигнал, который скрывает фактическую проблему загрузки.
+
+      КАК ДОЛЖНО РАБОТАТЬ:
+      Ошибка API должна показываться явно и отделяться от сценария "данных действительно нет".
+
+    code_example: |
+      # client/src/pages/unboxed.tsx
+      const { data = [], isLoading } = useQuery<UnboxedRow[]>({ queryKey: ["/api/unboxed"] });
+      ...
+      {isLoading ? "Загрузка..." : filtered.length === 0 ? "Нет расхождений" : ...}
+
+    found_count: 3
+    rejected_count: 0
+
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:23:38+04:00
+        agrees: true
+        note: "Раунд 2: тот же паттерн, что и на /boxes"
+      - agent: validator-frontend
+        timestamp: 2026-02-12T00:23:38+04:00
+        agrees: true
+        note: "Параллельный агент подтвердил сценарий с 500 от /api/unboxed"
+      - agent: validator-1
+        timestamp: 2026-02-12T00:46:42+04:00
+        agrees: true
+        note: "Практически воспроизведено через agent-browser: при aborted /api/unboxed показано 'Нет расхождений'"
+
+    fix: null
+
+  - id: e-box-20260212-004
+    file: client/src/pages/box-details.tsx
     category: logic-error
     severity: warning
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      POST /api/movements (через validateAndSanitizeForInsert) принимает отрицательные значения цен:
-      - purchasePrice для purchase
-      - salePrice и deliveryPrice для sale
-      - purchasePrice (если задано) для adjust
+      Черновик описания коробки синхронизируется только по зависимости box?.description.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Это приводит к некорректным финансовым метрикам (прибыль/выручка/логистика) и "странным" значениям в UI.
-      Ошибка реалистична: пользователь может случайно поставить минус (особенно при вводе с клавиатуры).
-      Дополнительно: создание заказов (createOrder) уже строго валидирует non-negative цены,
-      поэтому сейчас правила расходятся между "движениями" и "заказами".
+      При переходе между двумя коробками с одинаковым description (часто null/"")
+      useEffect не срабатывает, и в поле остаётся старый черновик от предыдущей коробки.
+      Пользователь может сохранить описание не в ту коробку.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Для purchase/sale/delivery/return_price требовать non-negative.
-      Для adjust unit price: либо тоже non-negative, либо явно задокументировать поддержку отрицательных значений.
+      Сбрасывать черновик при смене самой коробки (например, по box?.name),
+      а не только при изменении description-строки.
 
     code_example: |
-      # py_backend/storage.py (validateAndSanitizeForInsert)
-      if reason == "purchase":
-          requireNumberString(purchase_price, "Цена закупки")  # допускает "-100"
-      if reason == "sale":
-          requireNumberString(sale_price, "Цена продажи")      # допускает "-100"
-          requireNumberString(delivery_price, "Стоимость доставки")  # допускает "-100"
-
-      # Как исправить:
-      # - заменить requireNumberString(...) на requireNonNegativeNumberString(...)
-      # - синхронизировать frontend-валидацию в client/src/pages/add-movement.tsx
+      # client/src/pages/box-details.tsx
+      useEffect(() => {
+        if (!box) return;
+        setDescriptionDraft(box.description || "");
+      }, [box?.description]); // box?.name не участвует в зависимости
 
     found_count: 1
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:46:36+04:00
+        timestamp: 2026-02-12T00:23:38+04:00
         agrees: true
-        note: "Раунд 2 (поверхностный анализ)"
+        note: "Раунд 3: проверка состояния при навигации между коробками"
 
     fix: null
 
-  - id: e-box-003
-    file: py_backend/storage.py
-    category: race-condition
-    severity: warning
-
-    problem: |
-      КАК СЕЙЧАС РАБОТАЕТ:
-      createBox() делает read-then-insert:
-      1) SELECT по name_norm
-      2) INSERT в inventory.boxes
-
-      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      При двойном клике/двух вкладках/повторе запроса возможна гонка:
-      оба запроса пройдут SELECT, затем один INSERT упадет с unique violation (name_norm).
-      Этот asyncpg-эксепшн не преобразуется в InvalidRequestError, поэтому API может вернуть 500 вместо 400.
-
-      КАК ДОЛЖНО РАБОТАТЬ:
-      Обрабатывать уникальность атомарно:
-      - INSERT ... ON CONFLICT (name_norm) DO NOTHING/UPDATE + SELECT результата
-      или
-      - ловить sqlstate 23505 и превращать в InvalidRequestError("Коробка уже существует: ...")
-
-    code_example: |
-      # py_backend/storage.py (createBox)
-      existing = await self.inventoryPool.fetchrow(
-          "SELECT name FROM inventory.boxes WHERE name_norm = $1 LIMIT 1",
-          norm,
-      )
-      if existing is not None:
-          raise InvalidRequestError(...)
-
-      row = await self.inventoryPool.fetchrow(
-          "INSERT INTO inventory.boxes (...) VALUES (...) RETURNING ...",
-          ...
-      )
-
-    found_count: 1
-    rejected_count: 0
-
-    findings:
-      - agent: validator-1
-        timestamp: 2026-02-10T18:46:36+04:00
-        agrees: true
-        note: "Раунд 2 (поверхностный анализ)"
-
-    fix: null
-
-  - id: e-box-004
-    file: py_backend/storage.py
-    category: logic-error
-    severity: warning
-
-    problem: |
-      КАК СЕЙЧАС РАБОТАЕТ:
-      Для количественных полей, которые по смыслу должны быть целыми (qty, qtyDelta, qty в заказе/перемещении),
-      местами используется toInt(), которая просто TRUNC-ит float и строки (например "1.9" -> 1).
-
-      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Если фронт/клиент отправит дробное количество (что легко сделать в <input type="number">),
-      сервер "молча" округлит вниз и выполнит операцию с другим количеством, чем ожидал пользователь.
-      Это не падает ошибкой, но приводит к неожиданному поведению и потенциальным спорным данным (особенно для transfer).
-
-      КАК ДОЛЖНО РАБОТАТЬ:
-      Для qty/qtyDelta, где количество экземпляров, валидировать строго:
-      - число finite
-      - целое (is_integer)
-      - > 0 (или < 0 по смыслу)
-      и возвращать 400 при дробных значениях.
-      Параллельно: на фронте выставить step=1 и парсить через parseInt/Math.trunc.
-
-    code_example: |
-      # py_backend/storage.py
-      def toInt(value: Any) -> int:
-          ...
-          return math.trunc(n)   # 1.9 -> 1
-
-      # transferBetweenBoxesAttempt:
-      qty = toInt(data.get("qty"))   # дробь будет усечена
-
-      # createOrder / createOrderReturn:
-      qty = toInt(item_dict.get("qty"))  # дробь будет усечена
-
-      # Пример: фронт отправил qty=1.5 -> сервер выполнит qty=1 без явной ошибки.
-
-    found_count: 1
-    rejected_count: 0
-
-    findings:
-      - agent: validator-1
-        timestamp: 2026-02-10T18:55:06+04:00
-        agrees: true
-        note: "Раунд 3 (глубокий анализ)"
-
-    fix: null
-
-  - id: e-box-005
-    file: py_backend/storage.py
+  - id: e-box-20260212-005
+    file: py_backend/inventory_schema.py
     category: race-condition
     severity: critical
 
     problem: |
       КАК СЕЙЧАС РАБОТАЕТ:
-      updateBox() выполняет проверку "коробка пустая" и UPDATE is_active без явной транзакции SERIALIZABLE и без блокировок.
-      Это две независимые операции в Read Committed.
+      На startup backend всегда запускает ensure_inventory_schema(), где выполняется
+      серия DDL/UPDATE/CREATE VIEW операций без общего межпроцессного lock.
 
       ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      Возможна гонка с параллельной операцией, которая кладёт items в коробку (purchase/adjust(+)/return/transfer-to):
-      1) updateBox видит, что коробка пустая
-      2) другая транзакция вставляет items в эту коробку
-      3) updateBox закрывает коробку
-
-      Итог: закрытая коробка содержит `in_stock` items. Это ломает инварианты item-системы
-      (закрытая коробка не должна содержать items на складе) и может "запереть" товар, т.к. селекторы скрывают закрытые коробки.
+      При одновременном старте двух процессов приложения (или при пересечении с другим
+      процессом миграции) возникает deadlock в PostgreSQL. Один процесс падает на startup
+      с DeadlockDetectedError, сервис не поднимается.
 
       КАК ДОЛЖНО РАБОТАТЬ:
-      Закрытие коробки должно быть атомарным относительно операций с items:
-      - выполнить updateBox в SERIALIZABLE транзакции
-      - (желательно) залочить строку коробки (SELECT ... FOR UPDATE)
-      - проверку пустоты делать внутри той же транзакции
-      - дополнительно рассмотреть DB-level enforcement (trigger на items insert/update, запрещающий box_number в закрытую коробку)
+      Инициализация схемы должна быть взаимоисключающей между процессами:
+      advisory lock (pg_advisory_lock) вокруг bootstrap, либо отдельный миграционный процесс,
+      либо идемпотентные шаги в фиксированном порядке под единым lock.
 
     code_example: |
-      # py_backend/storage.py (updateBox) - нет явного BEGIN/COMMIT.
-      not_empty = await self.inventoryPool.fetchrow(
-          "SELECT 1 FROM inventory.box_contents WHERE box_number = $1 LIMIT 1",
-          canonical,
-      )
+      # py_backend/main.py
+      # startup -> init_app_context -> ensure_inventory_schema(...)
+
+      # py_backend/inventory_schema.py (фрагмент)
+      await conn.execute("CREATE TABLE IF NOT EXISTS ...")
       ...
-      updated = await self.inventoryPool.fetchrow(
-          "UPDATE inventory.boxes SET is_active = ...",
-          ...
+      await conn.execute(
+        \"\"\"
+        CREATE OR REPLACE VIEW inventory.box_contents AS
+        SELECT ...
+        \"\"\"
       )
+
+      # Практически полученная ошибка:
+      # asyncpg.exceptions.DeadlockDetectedError: deadlock detected
+      # Process A waits AccessExclusiveLock ... blocked by Process B, and vice versa
 
     found_count: 1
     rejected_count: 0
 
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:55:06+04:00
+        timestamp: 2026-02-12T00:46:42+04:00
         agrees: true
-        note: "Раунд 3 (глубокий анализ)"
-
-    fix: null
-
-  - id: e-box-006
-    file: py_backend/inventory_schema.py
-    category: edge-case
-    severity: warning
-
-    problem: |
-      КАК СЕЙЧАС РАБОТАЕТ:
-      При инициализации схемы boxes реестр заполняется из исторических movements.box_number (seed boxes from movements).
-      Исторически box_number был "свободным текстом", поэтому в данных могут встретиться имена коробок с символом '/'.
-
-      ЧТО МОЖЕТ ПОЙТИ НЕ ТАК:
-      В runtime API/валидации коробок '/' запрещён (requireBoxName), а UI/роуты используют коробку в path (/boxes/:name).
-      Если в базе появится коробка с '/', она станет проблемной:
-      - её может быть невозможно открыть в UI (404 на /api/boxes/{name} из-за requireBoxName)
-      - её может быть невозможно использовать в операциях (purchase/transfer/...) из-за requireBoxName
-
-      КАК ДОЛЖНО РАБОТАТЬ:
-      Во время seed/migration нужно гарантировать, что canonical name коробки соответствует runtime-валидации.
-      Например:
-      - при выборе canonical варианта предпочитать варианты без '/'
-      - либо санитизировать: заменить '/' на '-' (или другой безопасный символ) перед INSERT в boxes и canonicalize movements.
-
-    code_example: |
-      # py_backend/storage.py
-      def requireBoxName(value: Any, field: str) -> str:
-          ...
-          if "/" in name:
-              raise InvalidRequestError(f"{field} не должен содержать символ '/'")
-
-      # py_backend/inventory_schema.py (seed boxes from historical movements)
-      movement_box_rows = await conn.fetch(
-          \"\"\"
-          SELECT box_number, COUNT(*)::bigint AS cnt
-          FROM inventory.movements
-          WHERE box_number IS NOT NULL
-            AND LENGTH(TRIM(box_number)) > 0
-          GROUP BY box_number
-          \"\"\"
-      )
-      # далее canonical выбирается из raw box_number без фильтрации по '/'
-
-    found_count: 1
-    rejected_count: 0
-
-    findings:
-      - agent: validator-1
-        timestamp: 2026-02-10T18:57:21+04:00
-        agrees: true
-        note: "Раунд 3 (глубокий анализ)"
+        note: "Практический запуск npm run dev:py завершился падением startup с DeadlockDetectedError"
 
     fix: null
 
 # ═══════════════════════════════════════════════════════════════
-# БЛОК 2: АРХИТЕКТУРНЫЕ/ПРОДУКТОВЫЕ ПРОБЛЕМЫ (не баги, но можно лучше)
+# БЛОК 2: АРХИТЕКТУРНЫЕ ПРОБЛЕМЫ (улучшения)
 # ═══════════════════════════════════════════════════════════════
 
 improvements:
-  - id: i-box-001
+  - id: i-box-20260212-001
+    file: client/src/pages/box-details.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Большие списки invalidateQueries дублируются в нескольких мутациях
+      (transfer/applyInventory) и в других страницах (например stock-details).
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Легко пропустить один ключ при изменениях и получить "частично устаревший" UI.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести единый helper вида invalidateBoxAndStockQueries(queryClient, smart?).
+
+    code_example: |
+      # Повторяющиеся блоки invalidateQueries в:
+      # - client/src/pages/box-details.tsx
+      # - client/src/pages/stock-details.tsx
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:23:38+04:00
+        note: "Раунд 4: анализ связей и последствий после мутаций"
+
+    fix: null
+
+  - id: i-box-20260212-002
+    file: client/src/pages/boxes.tsx
+    category: dry-violation
+
+    issue: |
+      ЧТО НЕ ТАК:
+      Типы ответа по коробкам объявлены локально в нескольких местах
+      (boxes.tsx, box-selector.tsx, box-details.tsx) вместо общего контракта.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Изменение API может тихо разъехаться между экранами.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Вынести общий тип Box/BoxesResponse в shared-схему и переиспользовать.
+
+    code_example: |
+      # Локальные дубли:
+      # - type BoxRow / BoxesResponse (client/src/pages/boxes.tsx)
+      # - type BoxesApiResponse (client/src/components/box-selector.tsx)
+      # - type BoxInfo / BoxDetailsResponse (client/src/pages/box-details.tsx)
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:23:38+04:00
+        note: "Раунд 4: архитектурный обзор типов и контрактов"
+
+    fix: null
+
+  - id: i-box-20260212-003
     file: py_backend/storage.py
+    category: suboptimal
+
+    issue: |
+      ЧТО НЕ ТАК:
+      getBoxes(activeOnly=True) всегда считает агрегаты unboxed/overboxed,
+      хотя для BoxSelector нужен только список активных коробок.
+
+      ПОЧЕМУ ЭТО ПЛОХО:
+      Лишняя тяжёлая агрегация на запросах выбора коробки.
+
+      КАК СДЕЛАТЬ ЛУЧШЕ:
+      Разделить "легкий список коробок" и "страницу-аналитику коробок"
+      (или добавить флаг includeSummary=false).
+
+    code_example: |
+      # py_backend/storage.py:getBoxes
+      # После выборки boxes всегда выполняется второй CTE-запрос для unboxed/overboxed,
+      # даже если activeOnly=True и потребитель не использует summary.
+
+    found_count: 1
+    findings:
+      - agent: validator-1
+        timestamp: 2026-02-12T00:23:38+04:00
+        note: "Раунд 4: контекстный анализ вызовов /api/boxes?activeOnly=1"
+
+    fix: null
+
+  - id: i-box-20260212-004
+    file: client/src/pages/boxes.tsx
     category: dead-code
 
     issue: |
       ЧТО НЕ ТАК:
-      Метрика "overboxed" (когда в коробках числится больше, чем общий остаток) вычисляется и прокидывается в API/UI,
-      но при текущей item-based модели (истина = inventory.items) она логически недостижима:
-      boxedQty считается как subset totalQty, поэтому delta не может быть < 0.
+      UI-ветка "overboxed" почти недостижима в item-based модели,
+      потому что boxed_qty считается как подмножество total_qty из одной таблицы items.
 
       ПОЧЕМУ ЭТО ПЛОХО:
-      - лишняя сложность (код и UI-ветки, которые никогда не активируются)
-      - создаёт ложное чувство контроля (кажется, что система детектит расхождения, но на самом деле нет)
+      Поддерживается мёртвая/сомнительная ветка интерфейса и лишняя сложность.
 
       КАК СДЕЛАТЬ ЛУЧШЕ:
-      Варианты:
-      - удалить overboxed из backend/API/UI как недостижимый;
-      - либо пересчитать "overboxed" как mismatch между items и movements (если это реально нужно как диагностика),
-        с чётким определением "что считается истиной" и с тестами.
-
-    code_example: |
-      # py_backend/storage.py (getBoxes): overboxed_* считается через totals vs boxed,
-      # где boxed ⊆ totals, поэтому unboxed_qty < 0 недостижимо.
-
-    found_count: 1
-    findings:
-      - agent: validator-1
-        timestamp: 2026-02-10T18:46:36+04:00
-        note: "Раунд 2 (поверхностный анализ)"
-
-    fix: null
-
-  - id: i-box-002
-    file: client/src/pages/box-details.tsx
-    category: error-handling
-
-    issue: |
-      ЧТО НЕ ТАК:
-      "Инвентаризация" применяет корректировки как серию отдельных POST /api/movements (по одному на SMART).
-      Если запрос N упадёт (конфликт остатков/сеть/валидация), первые N-1 уже применены, а остальное нет.
-
-      ПОЧЕМУ ЭТО ПЛОХО:
-      - пользователь ожидает атомарность "Применить корректировки", а получит частичное применение
-      - тяжело откатывать вручную
-
-      КАК СДЕЛАТЬ ЛУЧШЕ:
-      Сделать отдельный backend endpoint вида POST /api/boxes/:name/inventory-adjust,
-      который применяет все diffs в одной SERIALIZABLE транзакции (или отклоняет целиком).
-
-    code_example: |
-      # client/src/pages/box-details.tsx
-      for (const r of diffs) {
-        await apiRequest("POST", "/api/movements", payload);
-      }
-
-    found_count: 1
-    findings:
-      - agent: validator-1
-        timestamp: 2026-02-10T18:46:36+04:00
-        note: "Раунд 2 (поверхностный анализ)"
-
-    fix: null
-
-  - id: i-box-003
-    file: client/src/pages/boxes.tsx
-    category: error-handling
-
-    issue: |
-      ЧТО НЕ ТАК:
-      На ключевых страницах коробок/остатков ошибки загрузки API не обрабатываются явно:
-      UI часто показывает состояние "пусто/не найдено" вместо "ошибка запроса".
-
-      ПОЧЕМУ ЭТО ПЛОХО:
-      - пользователь может принять неверное решение ("коробок нет", "коробка не найдена") при реальной проблеме сети/500
-      - сложнее диагностировать реальные сбои
-
-      КАК СДЕЛАТЬ ЛУЧШЕ:
-      Обрабатывать useQuery error-state:
-      - показывать явный error alert/placeholder с текстом ошибки
-      - (опционально) кнопка "повторить"
-      Аналогично для:
-      - client/src/pages/box-details.tsx
-      - client/src/pages/unboxed.tsx
-      - client/src/pages/stock-details.tsx
+      Либо убрать ветку overboxed, либо документировать и реализовать отдельный
+      источник для расчёта "расхождения legacy" (если это всё ещё бизнес-требование).
 
     code_example: |
       # client/src/pages/boxes.tsx
-      const { data, isLoading } = useQuery<BoxesResponse>({ queryKey: ["/api/boxes"] });
-      # если запрос упадёт, data будет undefined, а UI покажет "Пока нет коробок"
+      {!isLoading && (overboxed.positionsCount > 0 || overboxed.totalQty > 0) && ...}
+
+      # py_backend/storage.py:getBoxes
+      # overboxed_* считается из totals/boxed на inventory.items (state='in_stock').
 
     found_count: 1
     findings:
       - agent: validator-1
-        timestamp: 2026-02-10T18:59:43+04:00
-        note: "Раунд 4 (контекстный анализ UI)"
+        timestamp: 2026-02-12T00:23:38+04:00
+        note: "Раунд 4/5: перепроверка математики totals vs boxed"
 
     fix: null

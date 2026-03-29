@@ -29,7 +29,7 @@ export default function CustomersPage() {
     return qs ? `/api/customers?${qs}` : "/api/customers";
   }, [search, showArchived]);
 
-  const { data: customers = [], isLoading } = useQuery<Customer[]>({
+  const { data: customers = [], isLoading, isError, error } = useQuery<Customer[]>({
     queryKey: [queryKey],
   });
 
@@ -44,8 +44,12 @@ export default function CustomersPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
-      queryClient.invalidateQueries({ queryKey: [queryKey] });
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
       setName("");
       setPhone("");
       setNote("");
@@ -66,8 +70,12 @@ export default function CustomersPage() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
-      queryClient.invalidateQueries({ queryKey: [queryKey] });
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          Array.isArray(query.queryKey) &&
+          typeof query.queryKey[0] === "string" &&
+          query.queryKey[0].startsWith("/api/customers"),
+      });
       queryClient.invalidateQueries({
         predicate: (query) =>
           Array.isArray(query.queryKey) &&
@@ -189,6 +197,8 @@ export default function CustomersPage() {
           <CardContent>
             {isLoading ? (
               <p className="text-sm text-muted-foreground">Загрузка клиентов...</p>
+            ) : isError ? (
+              <p className="text-sm text-destructive">{error instanceof Error ? error.message : "Ошибка загрузки клиентов"}</p>
             ) : customers.length === 0 ? (
               <p className="text-sm text-muted-foreground">Клиенты не найдены</p>
             ) : (
