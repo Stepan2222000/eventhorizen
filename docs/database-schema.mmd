@@ -1,0 +1,235 @@
+erDiagram
+    %% ========================================
+    %% EventHorizen Database Schema
+    %% Schema: inventory + public
+    %% ========================================
+
+    %% ── SMART Catalog (public schema) ──
+    smart {
+        TEXT smart PK "SMART-код товара"
+        TEXT_ARRAY artikul "Артикулы (массив)"
+        TEXT naimenovanie "Наименование товара"
+        TEXT_ARRAY brend "Бренды (массив)"
+        TEXT_ARRAY konnekt_brend "Связанные бренды (массив)"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP updated_at "Дата обновления"
+    }
+
+    %% ── Boxes (warehouse locations) ──
+    boxes {
+        SERIAL id PK "ID коробки"
+        VARCHAR_50 name UK "Название (отображаемое)"
+        VARCHAR_64 name_norm UK "Нормализованное имя (для поиска)"
+        TEXT description "Описание"
+        BOOLEAN is_active "Активна ли коробка"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Shipping Methods ──
+    shipping_methods {
+        SERIAL id PK "ID способа доставки"
+        TEXT name UK "Название (Почта России, СДЭК, ...)"
+        BOOLEAN is_pickup "Самовывоз?"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Customers ──
+    customers {
+        SERIAL id PK "ID покупателя"
+        TEXT name "ФИО покупателя"
+        TEXT phone "Телефон"
+        TEXT note "Заметка"
+        TIMESTAMP archived_at "Дата архивации (soft delete)"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP updated_at "Дата обновления"
+    }
+
+    %% ── Orders ──
+    orders {
+        SERIAL id PK "ID заказа"
+        INTEGER customer_id FK "Покупатель"
+        TEXT note "Заметка к заказу"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP updated_at "Дата обновления"
+    }
+
+    %% ── Order Items ──
+    order_items {
+        SERIAL id PK "ID позиции"
+        INTEGER order_id FK "Заказ"
+        VARCHAR smart "SMART-код товара"
+        INTEGER qty "Количество (>0)"
+        NUMERIC_10_2 sale_price "Цена продажи за единицу (>=0)"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Shipments ──
+    shipments {
+        SERIAL id PK "ID отгрузки"
+        INTEGER order_id FK "Заказ"
+        INTEGER shipping_method_id FK "Способ доставки"
+        TEXT track_number "Трек-номер"
+        NUMERIC_10_2 delivery_price "Стоимость доставки (>=0)"
+        VARCHAR_20 delivery_payer "Кто платит: seller / buyer"
+        VARCHAR_20 status "Статус: pending / shipped / delivered"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP updated_at "Дата обновления"
+    }
+
+    %% ── Shipment Items ──
+    shipment_items {
+        SERIAL id PK "ID"
+        INTEGER shipment_id FK "Отгрузка"
+        INTEGER order_item_id FK "Позиция заказа"
+        INTEGER qty "Кол-во в этой отгрузке (>0)"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Returns ──
+    returns {
+        SERIAL id PK "ID возврата"
+        INTEGER order_id FK "Заказ"
+        VARCHAR_20 kind "Тип: return / correction"
+        TEXT note "Заметка"
+        NUMERIC_10_2 return_price "Стоимость возврата (>=0)"
+        VARCHAR_20 return_payer "Кто платит: seller / buyer"
+        INTEGER shipping_method_id FK "Способ доставки (опц.)"
+        TEXT track_number "Трек-номер возврата"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Return Items ──
+    return_items {
+        SERIAL id PK "ID"
+        INTEGER return_id FK "Возврат"
+        INTEGER order_item_id FK "Позиция заказа"
+        INTEGER qty "Кол-во возвращаемых (>0)"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Movements (audit log) ──
+    movements {
+        SERIAL id PK "ID операции"
+        VARCHAR smart "SMART-код товара"
+        INTEGER qty_delta "Изменение кол-ва (+/-)"
+        VARCHAR reason "Тип: purchase/sale/return/writeoff/adjust/transfer"
+        TEXT note "Комментарий"
+        NUMERIC_10_2 purchase_price "Цена закупки (>=0)"
+        NUMERIC_10_2 sale_price "Цена продажи (>=0)"
+        NUMERIC_10_2 delivery_price "Стоимость доставки (>=0)"
+        VARCHAR_50 box_number "Коробка"
+        TEXT track_number "Трек-номер"
+        INTEGER shipping_method_id FK "Способ доставки"
+        VARCHAR_50 sale_status "Статус: awaiting_shipment / shipped"
+        INTEGER order_id FK "Заказ"
+        INTEGER order_item_id FK "Позиция заказа"
+        INTEGER shipment_id FK "Отгрузка"
+        INTEGER return_id FK "Возврат"
+        INTEGER linked_movement_id FK "Парная операция (трансфер)"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Items (physical instances) ──
+    items {
+        BIGSERIAL id PK "ID экземпляра"
+        VARCHAR smart "SMART-код товара"
+        VARCHAR_32 state "Состояние: in_stock / sold / written_off"
+        VARCHAR_50 box_number FK "Коробка (только для in_stock)"
+        TEXT note "Заметка"
+        INTEGER purchase_movement_id FK "Операция закупки"
+        INTEGER sold_movement_id FK "Операция продажи"
+        INTEGER written_off_movement_id FK "Операция списания"
+        INTEGER last_movement_id FK "Последняя операция"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP updated_at "Дата обновления"
+    }
+
+    %% ── Movement Items (junction) ──
+    movement_items {
+        INTEGER movement_id PK_FK "Операция"
+        BIGINT item_id PK_FK "Экземпляр товара"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ── Item Media ──
+    item_media {
+        BIGSERIAL id PK "ID медиа"
+        BIGINT item_id FK "Экземпляр товара"
+        VARCHAR_16 kind "Тип: photo / video"
+        TEXT filename "Имя файла"
+        TEXT mime "MIME-тип"
+        BIGINT size_bytes "Размер файла"
+        TEXT sha256 "Хеш файла"
+        INTEGER chunk_size "Размер чанка (>0)"
+        TIMESTAMP created_at "Дата создания"
+        TIMESTAMP deleted_at "Дата удаления (soft delete)"
+    }
+
+    %% ── Item Media Chunks ──
+    item_media_chunks {
+        BIGINT media_id PK_FK "Медиа"
+        INTEGER idx PK "Индекс чанка (>=0)"
+        BYTEA data "Данные чанка"
+        TIMESTAMP created_at "Дата создания"
+    }
+
+    %% ========================================
+    %% RELATIONSHIPS
+    %% ========================================
+
+    %% Customer -> Orders
+    customers ||--o{ orders : "has many orders"
+
+    %% Order -> Order Items
+    orders ||--o{ order_items : "contains items"
+
+    %% Order -> Shipments
+    orders ||--o{ shipments : "shipped via"
+
+    %% Order -> Returns
+    orders ||--o{ returns : "may have returns"
+
+    %% Shipment -> Shipment Items
+    shipments ||--o{ shipment_items : "contains"
+
+    %% Shipment Items -> Order Items
+    order_items ||--o{ shipment_items : "shipped in"
+
+    %% Return -> Return Items
+    returns ||--o{ return_items : "contains"
+
+    %% Return Items -> Order Items
+    order_items ||--o{ return_items : "returned from"
+
+    %% Shipping Methods
+    shipping_methods ||--o{ shipments : "used by"
+    shipping_methods ||--o{ returns : "used by"
+    shipping_methods ||--o{ movements : "used by"
+
+    %% Movements -> linked movement (self-ref for transfers)
+    movements ||--o| movements : "linked (transfer pair)"
+
+    %% Movements -> Orders/Order Items/Shipments/Returns
+    orders ||--o{ movements : "generated movements"
+    order_items ||--o{ movements : "generated movements"
+    shipments ||--o{ movements : "generated movements"
+    returns ||--o{ movements : "generated movements"
+
+    %% Items -> Boxes
+    boxes ||--o{ items : "stores"
+
+    %% Items -> Movements (lifecycle FKs)
+    movements ||--o{ items : "purchase_movement"
+    movements ||--o{ items : "sold_movement"
+    movements ||--o{ items : "written_off_movement"
+    movements ||--o{ items : "last_movement"
+
+    %% Movement Items (junction: movements <-> items)
+    movements ||--o{ movement_items : "involves"
+    items ||--o{ movement_items : "tracked by"
+
+    %% Item Media
+    items ||--o{ item_media : "has media"
+
+    %% Item Media Chunks
+    item_media ||--o{ item_media_chunks : "stored as chunks"

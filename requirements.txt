@@ -3,5 +3,6 @@ fastapi
 openpyxl
 pydantic
 python-dotenv
+python-multipart
 uvicorn
 xlrd

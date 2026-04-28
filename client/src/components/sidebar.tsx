@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   BarChart3,
+  BookOpen,
   DatabaseZap,
   FileUp,
   History,
@@ -50,6 +51,7 @@ const navigation: NavItem[] = [
   { title: "Распроданные товары", href: "/sold-out", icon: PackageX },
   { title: "Топ запчастей", href: "/top-parts", icon: BarChart3 },
   { title: "Массовая загрузка", href: "/import", icon: FileUp },
+  { title: "SMART Каталог", href: "/smart-catalog", icon: BookOpen },
 ];
 
 export function AppSidebar({ className, ...props }: React.ComponentProps<typeof Sidebar>) {

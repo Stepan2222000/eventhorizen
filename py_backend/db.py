@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import ssl
 from dataclasses import dataclass
 
 import asyncpg
 
-from .config import PgSslConfig, read_app_config_from_env
+from .config import read_app_config_from_env
 
 
 @dataclass
@@ -16,15 +15,17 @@ class DbPools:
     inventory_pool: asyncpg.Pool
 
 
-def _to_asyncpg_ssl_arg(ssl_config: PgSslConfig) -> ssl.SSLContext | None:
-    if ssl_config is None:
-        return None
+def _to_asyncpg_ssl_arg(mode: str | None) -> str:
+    # asyncpg handles libpq-style ssl modes directly; passing None here can
+    # trigger an unwanted SSL upgrade attempt against non-SSL Postgres servers.
+    if not mode or not mode.strip():
+        return "prefer"
 
-    context = ssl.create_default_context()
-    if not ssl_config.get("rejectUnauthorized", False):
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-    return context
+    normalized = mode.strip().lower()
+    if normalized in {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}:
+        return normalized
+
+    return "prefer"
 
 
 async def _init_inventory_connection(conn: asyncpg.Connection) -> None:
@@ -41,7 +42,7 @@ async def create_db_pools_from_env() -> DbPools:
         database=config.parts_db.database,
         user=config.parts_db.user,
         password=config.parts_db.password,
-        ssl=_to_asyncpg_ssl_arg(config.parts_db.ssl_config),
+        ssl=_to_asyncpg_ssl_arg(config.parts_db.ssl),
         # Keep startup fail-fast, but avoid flaky remote connections.
         timeout=20.0,
         max_inactive_connection_lifetime=30.0,
@@ -55,7 +56,7 @@ async def create_db_pools_from_env() -> DbPools:
         database=config.inventory_db.database,
         user=config.inventory_db.user,
         password=config.inventory_db.password,
-        ssl=_to_asyncpg_ssl_arg(config.inventory_db.ssl_config),
+        ssl=_to_asyncpg_ssl_arg(config.inventory_db.ssl),
         # Keep startup fail-fast, but avoid flaky remote connections.
         timeout=20.0,
         max_inactive_connection_lifetime=30.0,

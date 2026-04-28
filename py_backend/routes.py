@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openpyxl import Workbook, load_workbook
 
 from py_backend.normalization import normalize_article
+from py_backend.context import reload_smart_cache
 from py_backend.storage import DatabaseStorage, InsufficientBoxStockError, InsufficientStockError, InvalidRequestError
 from py_backend.types import SaleStatus
 
@@ -1386,6 +1387,65 @@ def register_routes(app: FastAPI) -> None:
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": 'attachment; filename="inventory-import-template.xlsx"'},
         )
+
+    # ── SMART Catalog CRUD ─────────────────────────────────────────
+
+    @app.get("/api/smart-catalog")
+    async def list_smart_catalog(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            search = request.query_params.get("search")
+            limit = min(500, max(1, int(request.query_params.get("limit", "200"))))
+            offset = max(0, int(request.query_params.get("offset", "0")))
+            result = await storage.getSmartCatalog(search=search, limit=limit, offset=offset)
+            return JSONResponse(content=result)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to list smart catalog"})
+
+    @app.post("/api/smart-catalog")
+    async def create_smart_entry(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        try:
+            body = await parse_json_body(request)
+            entry = await storage.createSmartEntry(body)
+            ctx = request.app.state.ctx
+            await reload_smart_cache(ctx)
+            return JSONResponse(status_code=201, content=entry)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to create smart entry"})
+
+    @app.put("/api/smart-catalog/{code:path}")
+    async def update_smart_entry(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        code = request.path_params["code"]
+        try:
+            body = await parse_json_body(request)
+            entry = await storage.updateSmartEntry(code, body)
+            ctx = request.app.state.ctx
+            await reload_smart_cache(ctx)
+            return JSONResponse(content=entry)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to update smart entry"})
+
+    @app.delete("/api/smart-catalog/{code:path}")
+    async def delete_smart_entry(request: Request) -> Response:
+        storage = _storage_from_request(request)
+        code = request.path_params["code"]
+        try:
+            result = await storage.deleteSmartEntry(code)
+            ctx = request.app.state.ctx
+            await reload_smart_cache(ctx)
+            return JSONResponse(content=result)
+        except InvalidRequestError as err:
+            return JSONResponse(status_code=400, content={"error": str(err)})
+        except Exception as err:
+            return JSONResponse(status_code=500, content={"error": str(err) if str(err) else "Failed to delete smart entry"})
 
     @app.get("/api/dashboard/stats")
     async def dashboard_stats(request: Request) -> Response:

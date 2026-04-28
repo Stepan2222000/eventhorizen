@@ -32,6 +32,22 @@ export type Smart = {
   description?: string[] | null;
 };
 
+// SMART catalog entry (local CRUD)
+export type SmartCatalogEntry = {
+  smart: string;
+  articles: string[];
+  name: string | null;
+  brand: string[];
+  description: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SmartCatalogResponse = {
+  items: SmartCatalogEntry[];
+  total: number;
+};
+
 export type Reason = {
   code: ReasonCode;
   title: string;

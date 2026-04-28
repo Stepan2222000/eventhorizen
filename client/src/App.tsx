@@ -19,6 +19,7 @@ import SoldItems from "@/pages/sold-items";
 import SoldOut from "@/pages/sold-out";
 import TopParts from "@/pages/top-parts";
 import BulkImport from "@/pages/bulk-import";
+import SmartCatalog from "@/pages/smart-catalog";
 import Customers from "@/pages/customers";
 import CustomerDetails from "@/pages/customer-details";
 import OrderDetails from "@/pages/order-details";
@@ -47,6 +48,7 @@ function Router() {
       <Route path="/customers/:id" component={CustomerDetails} />
       <Route path="/top-parts" component={TopParts} />
       <Route path="/import" component={BulkImport} />
+      <Route path="/smart-catalog" component={SmartCatalog} />
       <Route component={NotFound} />
     </Switch>
   );

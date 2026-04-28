@@ -771,15 +771,26 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
 
         await conn.execute(
             """
-            WITH dup AS (
-              SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
-              FROM inventory.shipping_methods
-            )
-            UPDATE inventory.movements m
-            SET shipping_method_id = d.keep_id
-            FROM dup d
-            WHERE m.shipping_method_id = d.id
-              AND d.id <> d.keep_id
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'inventory'
+                  AND table_name = 'movements'
+              ) THEN
+                WITH dup AS (
+                  SELECT id, MIN(id) OVER (PARTITION BY name) AS keep_id
+                  FROM inventory.shipping_methods
+                )
+                UPDATE inventory.movements m
+                SET shipping_method_id = d.keep_id
+                FROM dup d
+                WHERE m.shipping_method_id = d.id
+                  AND d.id <> d.keep_id;
+              END IF;
+            END
+            $$;
             """
         )
         await conn.execute(
@@ -1532,6 +1543,26 @@ async def ensure_inventory_schema(inventory_pool: asyncpg.Pool) -> None:
             GROUP BY smart
             HAVING COUNT(*) > 0
             """
+        )
+
+        # ── Local SMART reference catalog ──────────────────────────────
+        # Column names are Cyrillic to match the existing load_smart_cache()
+        # query in smart_cache.py (SELECT "артикул", "наименование", …).
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.smart (
+              smart TEXT PRIMARY KEY,
+              "артикул" TEXT[] DEFAULT '{}',
+              "наименование" TEXT,
+              "бренд" TEXT[] DEFAULT '{}',
+              "коннект_бренд" TEXT[] DEFAULT '{}',
+              created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+              updated_at TIMESTAMP DEFAULT NOW() NOT NULL
+            )
+            """
+        )
+        await conn.execute(
+            'CREATE INDEX IF NOT EXISTS smart_name_idx ON public.smart ("наименование")'
         )
 
         # Helpful indexes for common filters.

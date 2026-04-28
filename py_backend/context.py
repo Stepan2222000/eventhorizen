@@ -113,6 +113,17 @@ def start_smart_cache_refresh(ctx: AppContext) -> None:
     ctx._refresh_task = asyncio.create_task(_refresh_loop())
 
 
+async def reload_smart_cache(ctx: AppContext) -> None:
+    """Force-reload the SMART cache from the database immediately."""
+    new_cache = await load_smart_cache(ctx.pools.parts_pool)
+    if isinstance(ctx.storage, SupportsSmartCacheUpdate):
+        ctx.storage.update_smart_cache(new_cache)
+    elif hasattr(ctx.storage, "updateSmartCache"):
+        ctx.storage.updateSmartCache(new_cache)
+    ctx.smart_cache = new_cache
+    logging.info("SMART cache force-reloaded: %s entries", new_cache.size)
+
+
 async def init_app_context(storage_factory: StorageFactory | None = None) -> AppContext:
     pools = await create_db_pools_from_env()
     max_wait_ms = get_db_connect_max_wait_ms()
@@ -147,5 +158,6 @@ async def init_app_context(storage_factory: StorageFactory | None = None) -> App
 # TypeScript-compatible aliases.
 getDbConnectMaxWaitMs = get_db_connect_max_wait_ms
 waitForDb = wait_for_db
+reloadSmartCache = reload_smart_cache
 startSmartCacheRefresh = start_smart_cache_refresh
 initAppContext = init_app_context

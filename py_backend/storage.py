@@ -4236,3 +4236,163 @@ class DatabaseStorage:
                 )
 
         return result
+
+    # ── SMART Catalog CRUD ────────────────────────────────────────
+
+    @staticmethod
+    def _map_smart_row(row: Any) -> dict[str, Any]:
+        return {
+            "smart": row["smart"],
+            "articles": list(row["артикул"] or []),
+            "name": row["наименование"],
+            "brand": list(row["бренд"] or []),
+            "description": list(row["коннект_бренд"] or []),
+            "createdAt": toDateIso(row["created_at"]),
+            "updatedAt": toDateIso(row["updated_at"]),
+        }
+
+    async def getSmartCatalog(
+        self,
+        search: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        if search and search.strip():
+            pattern = f"%{search.strip()}%"
+            rows = await self.inventoryPool.fetch(
+                """
+                SELECT smart, "артикул", "наименование", "бренд", "коннект_бренд",
+                       created_at, updated_at
+                FROM public.smart
+                WHERE smart ILIKE $1 OR "наименование" ILIKE $1
+                ORDER BY smart ASC
+                LIMIT $2 OFFSET $3
+                """,
+                pattern,
+                limit,
+                offset,
+            )
+            total = await self.inventoryPool.fetchval(
+                """
+                SELECT COUNT(*)::bigint FROM public.smart
+                WHERE smart ILIKE $1 OR "наименование" ILIKE $1
+                """,
+                pattern,
+            )
+        else:
+            rows = await self.inventoryPool.fetch(
+                """
+                SELECT smart, "артикул", "наименование", "бренд", "коннект_бренд",
+                       created_at, updated_at
+                FROM public.smart
+                ORDER BY smart ASC
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
+            total = await self.inventoryPool.fetchval(
+                "SELECT COUNT(*)::bigint FROM public.smart"
+            )
+
+        return {
+            "items": [self._map_smart_row(r) for r in rows],
+            "total": int(total or 0),
+        }
+
+    async def createSmartEntry(self, data: dict[str, Any]) -> dict[str, Any]:
+        d = _as_dict(data)
+        smart = requireNonEmpty(d.get("smart"), "SMART код").strip()
+        name = d.get("name")
+        if isinstance(name, str):
+            name = name.strip() or None
+        else:
+            name = None
+        articles = [s.strip() for s in (d.get("articles") or []) if isinstance(s, str) and s.strip()]
+        brand = [s.strip() for s in (d.get("brand") or []) if isinstance(s, str) and s.strip()]
+        description = [s.strip() for s in (d.get("description") or []) if isinstance(s, str) and s.strip()]
+
+        try:
+            row = await self.inventoryPool.fetchrow(
+                """
+                INSERT INTO public.smart (smart, "артикул", "наименование", "бренд", "коннект_бренд",
+                                          created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                RETURNING smart, "артикул", "наименование", "бренд", "коннект_бренд", created_at, updated_at
+                """,
+                smart,
+                articles,
+                name,
+                brand,
+                description,
+            )
+        except Exception as err:
+            if "unique" in str(err).lower() or "duplicate" in str(err).lower():
+                raise InvalidRequestError(f"SMART код '{smart}' уже существует") from err
+            raise
+
+        if row is None:
+            raise Exception("Failed to create SMART entry")
+        return self._map_smart_row(row)
+
+    async def updateSmartEntry(self, smart_code: str, data: dict[str, Any]) -> dict[str, Any]:
+        d = _as_dict(data)
+        name = d.get("name")
+        if isinstance(name, str):
+            name = name.strip() or None
+        else:
+            name = None
+        articles = [s.strip() for s in (d.get("articles") or []) if isinstance(s, str) and s.strip()]
+        brand = [s.strip() for s in (d.get("brand") or []) if isinstance(s, str) and s.strip()]
+        description = [s.strip() for s in (d.get("description") or []) if isinstance(s, str) and s.strip()]
+
+        row = await self.inventoryPool.fetchrow(
+            """
+            UPDATE public.smart
+            SET "артикул" = $2,
+                "наименование" = $3,
+                "бренд" = $4,
+                "коннект_бренд" = $5,
+                updated_at = NOW()
+            WHERE smart = $1
+            RETURNING smart, "артикул", "наименование", "бренд", "коннект_бренд", created_at, updated_at
+            """,
+            smart_code,
+            articles,
+            name,
+            brand,
+            description,
+        )
+        if row is None:
+            raise InvalidRequestError(f"SMART код '{smart_code}' не найден")
+        return self._map_smart_row(row)
+
+    async def deleteSmartEntry(self, smart_code: str) -> dict[str, Any]:
+        movement_count = await self.inventoryPool.fetchval(
+            "SELECT COUNT(*)::bigint FROM inventory.movements WHERE smart = $1",
+            smart_code,
+        )
+        if movement_count and int(movement_count) > 0:
+            raise InvalidRequestError(
+                f"Нельзя удалить: SMART '{smart_code}' используется в {movement_count} движениях"
+            )
+
+        item_count = await self.inventoryPool.fetchval(
+            "SELECT COUNT(*)::bigint FROM inventory.items WHERE smart = $1",
+            smart_code,
+        )
+        if item_count and int(item_count) > 0:
+            raise InvalidRequestError(
+                f"Нельзя удалить: SMART '{smart_code}' используется в {item_count} экземплярах"
+            )
+
+        deleted = await self.inventoryPool.fetchrow(
+            """
+            DELETE FROM public.smart WHERE smart = $1
+            RETURNING smart, "артикул", "наименование", "бренд", "коннект_бренд", created_at, updated_at
+            """,
+            smart_code,
+        )
+        if deleted is None:
+            raise InvalidRequestError(f"SMART код '{smart_code}' не найден")
+        return self._map_smart_row(deleted)
